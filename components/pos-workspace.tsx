@@ -190,6 +190,16 @@ export function PosWorkspace() {
   const [staffPassword, setStaffPassword] = useState("");
   const [staffRole, setStaffRole] = useState("CASHIER");
   const [editingStaffId, setEditingStaffId] = useState<string>("");
+  const [editingStockItemId, setEditingStockItemId] = useState<string>("");
+  const [editStockName, setEditStockName] = useState("");
+  const [editStockUnit, setEditStockUnit] = useState("");
+  const [editStockQuantity, setEditStockQuantity] = useState("");
+  const [editStockReorderLevel, setEditStockReorderLevel] = useState("");
+  const [editingMenuItemId, setEditingMenuItemId] = useState<string>("");
+  const [editMenuName, setEditMenuName] = useState("");
+  const [editMenuPrice, setEditMenuPrice] = useState("");
+  const [editMenuDescription, setEditMenuDescription] = useState("");
+  const [editMenuIsAvailable, setEditMenuIsAvailable] = useState(true);
   const [tenantName, setTenantName] = useState("");
   const [tenantAddress, setTenantAddress] = useState("");
   const [tenantPhone, setTenantPhone] = useState("");
@@ -198,6 +208,9 @@ export function PosWorkspace() {
   const [tenantBrandColor, setTenantBrandColor] = useState("#a64b2a");
   const [invoiceOrderId, setInvoiceOrderId] = useState("");
   const [smsBalance, setSmsBalance] = useState<number | null>(null);
+  const [orderCart, setOrderCart] = useState<Array<{ menuItemId: number; name: string; price: number; quantity: number }>>([]);
+  const [menuSearch, setMenuSearch] = useState("");
+  const [ordersFilter, setOrdersFilter] = useState<"all" | "open">("open");
   const [forgotMode, setForgotMode] = useState<"off" | "phone" | "otp">("off");
   const [forgotIdentifier, setForgotIdentifier] = useState("");
   const [forgotOtp, setForgotOtp] = useState("");
@@ -368,15 +381,27 @@ export function PosWorkspace() {
     }
   }
 
+  function addToCart() {
+    if (!selectedMenuItemId) return;
+    const menuItem = menuOptions.find((item) => item.id === Number(selectedMenuItemId));
+    if (!menuItem) return;
+    const qty = Math.max(1, Number(quantity) || 1);
+    setOrderCart((prev) => {
+      const existing = prev.find((entry) => entry.menuItemId === menuItem.id);
+      if (existing) {
+        return prev.map((entry) => entry.menuItemId === menuItem.id ? { ...entry, quantity: entry.quantity + qty } : entry);
+      }
+      return [...prev, { menuItemId: menuItem.id, name: `${menuItem.category} · ${menuItem.name}`, price: menuItem.price, quantity: qty }];
+    });
+    setSelectedMenuItemId("");
+    setMenuSearch("");
+    setQuantity("1");
+  }
+
   async function createOrder(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!token || !selectedMenuItemId) {
-      return;
-    }
-
-    const menuItem = categories.flatMap((category) => category.items).find((item) => item.id === Number(selectedMenuItemId));
-    if (!menuItem) {
-      setMessage("Select a valid menu item.");
+    if (!token || orderCart.length === 0) {
+      setMessage("Add at least one item to the order.");
       return;
     }
 
@@ -392,13 +417,14 @@ export function PosWorkspace() {
             customerPhone: customerPhone || null,
             deliveryLocation: orderMode === "TAKEAWAY" ? deliveryLocation || null : null,
             deliveryAddress: orderMode === "TAKEAWAY" ? deliveryAddress || null : null,
-            items: [{ menuItemId: menuItem.id, quantity: Number(quantity) }]
+            items: orderCart.map((entry) => ({ menuItemId: entry.menuItemId, quantity: entry.quantity }))
           })
         },
         token
       );
 
       setMessage("Order created.");
+      setOrderCart([]);
       setSelectedMenuItemId("");
       setQuantity("1");
       setCustomerName("");
@@ -515,6 +541,7 @@ export function PosWorkspace() {
   async function createStockItem(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!token || !stockName || !stockUnit || !stockQuantity) {
+      setMessage("Stock item name, unit, and quantity are required.");
       return;
     }
 
@@ -541,6 +568,54 @@ export function PosWorkspace() {
       await loadWorkspace(token);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to create stock item.");
+    }
+  }
+
+  async function updateStockItem(itemId: number) {
+    if (!token) return;
+    try {
+      await apiRequest(
+        `/inventory/items/${itemId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            name: editStockName,
+            unit: editStockUnit,
+            quantity: Number(editStockQuantity),
+            reorderLevel: Number(editStockReorderLevel || 0)
+          })
+        },
+        token
+      );
+      setEditingStockItemId("");
+      setMessage("Stock item updated.");
+      await loadWorkspace(token);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to update stock item.");
+    }
+  }
+
+  async function updateMenuItem(itemId: number) {
+    if (!token) return;
+    try {
+      await apiRequest(
+        `/menu/items/${itemId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            name: editMenuName,
+            price: Number(editMenuPrice),
+            description: editMenuDescription || null,
+            isAvailable: editMenuIsAvailable
+          })
+        },
+        token
+      );
+      setEditingMenuItemId("");
+      setMessage("Menu item updated.");
+      await loadWorkspace(token);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to update menu item.");
     }
   }
 
@@ -805,8 +880,11 @@ export function PosWorkspace() {
   }
 
   const menuOptions = categories.flatMap((category) =>
-    category.items.map((item) => ({
+    category.items.filter((item) => item.isAvailable).map((item) => ({
       id: item.id,
+      name: item.name,
+      category: category.name,
+      price: item.price,
       label: `${category.name} · ${item.name} · KES ${item.price}`
     }))
   );
@@ -1120,17 +1198,17 @@ export function PosWorkspace() {
 
       <section className="metrics-grid">
         {[
-          ["Open Orders", summary?.openOrders ?? 0],
-          ["Ready Orders", summary?.readyOrders ?? 0],
-          ["Today Sales", summary?.todaySales == null ? "Restricted" : formatCurrency(summary.todaySales)],
-          ["Low Stock", summary?.lowStockItems ?? 0],
-          ["Active Tables", summary?.activeTables ?? 0],
-          ["Menu Items", summary?.menuItems ?? 0]
-        ].map(([label, value]) => (
-          <article key={label} className="card metric-card">
-            <span>{label}</span>
-            <strong>{value}</strong>
-          </article>
+          ["Open Orders", summary?.openOrders ?? 0, "#orders"],
+          ["Ready Orders", summary?.readyOrders ?? 0, "#orders"],
+          ["Today Sales", summary?.todaySales == null ? "Restricted" : formatCurrency(summary.todaySales), "#reports"],
+          ["Low Stock", summary?.lowStockItems ?? 0, "#inventory"],
+          ["Active Tables", summary?.activeTables ?? 0, "#tables-alerts"],
+          ["Menu Items", summary?.menuItems ?? 0, "#menu"]
+        ].map(([label, value, href]) => (
+          <a key={label as string} href={href as string} className="card metric-card metric-card-link">
+            <span>{label as string}</span>
+            <strong>{value as string | number}</strong>
+          </a>
         ))}
       </section>
 
@@ -1138,63 +1216,118 @@ export function PosWorkspace() {
         {canCreateOrders ? <article id="new-order" className="card panel">
           <div className="panel-head">
             <h2>New order</h2>
-            <p>Capture dine-in and takeaway orders from one operator panel.</p>
+            <p>Fill in the steps below to place a new order.</p>
           </div>
           <form className="stack" onSubmit={createOrder}>
-            <label>
-              Order type
-              <select value={orderMode} onChange={(event) => setOrderMode(event.target.value as "DINE_IN" | "TAKEAWAY")}>
-                <option value="DINE_IN">Dine In</option>
-                <option value="TAKEAWAY">Takeaway</option>
-              </select>
-            </label>
-            <label>
-              Table
-              <select value={selectedTableId} onChange={(event) => setSelectedTableId(event.target.value)}>
-                <option value="">Select table</option>
-                {tables.map((table) => (
-                  <option key={table.id} value={table.id}>
-                    {table.label} · {table.capacity} pax
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Menu item
-              <select value={selectedMenuItemId} onChange={(event) => setSelectedMenuItemId(event.target.value)}>
-                <option value="">Select item</option>
-                {menuOptions.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Quantity
-              <input inputMode="numeric" value={quantity} onChange={(event) => setQuantity(event.target.value)} />
-            </label>
-            <label>
-              Customer name
-              <input value={customerName} onChange={(event) => setCustomerName(event.target.value)} />
-            </label>
-            <label>
-              Customer phone
-              <input type="tel" autoComplete="tel" value={customerPhone} onChange={(event) => setCustomerPhone(event.target.value)} />
-            </label>
-            {orderMode === "TAKEAWAY" ? (
-              <>
-                <label>
-                  Delivery location
-                  <input value={deliveryLocation} onChange={(event) => setDeliveryLocation(event.target.value)} />
-                </label>
-                <label>
-                  Delivery address
-                  <input value={deliveryAddress} onChange={(event) => setDeliveryAddress(event.target.value)} />
-                </label>
-              </>
-            ) : null}
-            <button type="submit">Create order</button>
+
+            {/* Step 1 — Order type */}
+            <div className="order-step">
+              <p className="order-step-label">1 · Order type</p>
+              <div className="order-type-toggle">
+                <button
+                  type="button"
+                  className={orderMode === "DINE_IN" ? "toggle-active" : "toggle-inactive"}
+                  onClick={() => { setOrderMode("DINE_IN"); setSelectedTableId(""); }}
+                >
+                  Dine In
+                </button>
+                <button
+                  type="button"
+                  className={orderMode === "TAKEAWAY" ? "toggle-active" : "toggle-inactive"}
+                  onClick={() => setOrderMode("TAKEAWAY")}
+                >
+                  Takeaway
+                </button>
+              </div>
+            </div>
+
+            {/* Step 2 — Table or customer */}
+            <div className="order-step">
+              <p className="order-step-label">2 · {orderMode === "DINE_IN" ? "Table" : "Customer"}</p>
+              {orderMode === "DINE_IN" ? (
+                <select value={selectedTableId} onChange={(event) => setSelectedTableId(event.target.value)}>
+                  <option value="">Select table</option>
+                  {tables.map((table) => (
+                    <option key={table.id} value={table.id}>
+                      {table.label} · {table.capacity} pax
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="stack">
+                  <label>
+                    Customer name
+                    <input placeholder="e.g. Jane" value={customerName} onChange={(event) => setCustomerName(event.target.value)} />
+                  </label>
+                  <label>
+                    Phone
+                    <input type="tel" autoComplete="tel" placeholder="e.g. 0712 345 678" value={customerPhone} onChange={(event) => setCustomerPhone(event.target.value)} />
+                  </label>
+                  <label>
+                    Delivery location
+                    <input placeholder="e.g. Gate B" value={deliveryLocation} onChange={(event) => setDeliveryLocation(event.target.value)} />
+                  </label>
+                  <label>
+                    Delivery address
+                    <input placeholder="e.g. Westlands, Nairobi" value={deliveryAddress} onChange={(event) => setDeliveryAddress(event.target.value)} />
+                  </label>
+                </div>
+              )}
+            </div>
+
+            {/* Step 3 — Add items */}
+            <div className="order-step">
+              <p className="order-step-label">3 · Add items</p>
+              <div className="item-search-row">
+                <div className="item-search-wrap">
+                  <input
+                    placeholder="Search menu…"
+                    value={menuSearch}
+                    onChange={(event) => { setMenuSearch(event.target.value); setSelectedMenuItemId(""); }}
+                    autoComplete="off"
+                  />
+                  {menuSearch.trim() && !selectedMenuItemId && (
+                    <ul className="menu-search-results">
+                      {menuOptions.filter((item) => `${item.name} ${item.category}`.toLowerCase().includes(menuSearch.toLowerCase())).map((item) => (
+                        <li key={item.id} onClick={() => { setSelectedMenuItemId(String(item.id)); setMenuSearch(item.name); }}>
+                          <span className="search-item-name">{item.name}</span>
+                          <span className="search-item-meta">{item.category} · KES {item.price.toLocaleString()}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <input
+                  className="qty-input"
+                  inputMode="numeric"
+                  placeholder="Qty"
+                  value={quantity}
+                  onChange={(event) => setQuantity(event.target.value)}
+                />
+                <button type="button" className="add-item-btn" onClick={addToCart} disabled={!selectedMenuItemId}>+ Add</button>
+              </div>
+
+              {orderCart.length > 0 && (
+                <div className="cart-list">
+                  {orderCart.map((entry) => (
+                    <div key={entry.menuItemId} className="cart-row">
+                      <span className="cart-name">{entry.name}</span>
+                      <span className="cart-qty">× {entry.quantity}</span>
+                      <span className="cart-total">KES {(entry.price * entry.quantity).toLocaleString()}</span>
+                      <button type="button" className="cart-remove" onClick={() => setOrderCart((prev) => prev.filter((e) => e.menuItemId !== entry.menuItemId))}>✕</button>
+                    </div>
+                  ))}
+                  <div className="cart-subtotal">
+                    <span>Subtotal</span>
+                    <strong>KES {orderCart.reduce((sum, e) => sum + e.price * e.quantity, 0).toLocaleString()}</strong>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <button type="submit" disabled={orderCart.length === 0}>
+              Place order{orderCart.length > 0 ? ` · ${orderCart.reduce((n, e) => n + e.quantity, 0)} item${orderCart.reduce((n, e) => n + e.quantity, 0) !== 1 ? "s" : ""}` : ""}
+            </button>
           </form>
         </article> : null}
 
@@ -1208,7 +1341,7 @@ export function PosWorkspace() {
               Order
               <select value={paymentOrderId} onChange={(event) => setPaymentOrderId(event.target.value)}>
                 <option value="">Select order</option>
-                {orders.map((order) => (
+                {orders.filter((o) => o.status !== "PAID" && o.status !== "VOIDED").map((order) => (
                   <option key={order.id} value={order.id}>
                     {order.orderNumber} · KES {order.totals.subtotal}
                   </option>
@@ -1297,14 +1430,21 @@ export function PosWorkspace() {
             <h2>Orders</h2>
             <p>Monitor live order flow, advance service state, and act on kitchen items.</p>
           </div>
+          <div className="tab-bar">
+            <button type="button" className={`tab-btn${ordersFilter === "open" ? " tab-active" : ""}`} onClick={() => setOrdersFilter("open")}>Open</button>
+            <button type="button" className={`tab-btn${ordersFilter === "all" ? " tab-active" : ""}`} onClick={() => setOrdersFilter("all")}>All</button>
+          </div>
           <div className="order-list">
-            {orders.length === 0 ? (
-              <div className="empty-state">
-                <strong>No orders yet</strong>
-                <p>Create the first order to activate kitchen, payment, and dispatch flows.</p>
-              </div>
-            ) : orders.map((order) => (
-              <div key={order.id} className="order-card">
+            {(() => {
+              const visible = ordersFilter === "open" ? orders.filter((o) => o.status !== "PAID" && o.status !== "VOIDED") : orders;
+              if (visible.length === 0) return (
+                <div className="empty-state">
+                  <strong>{ordersFilter === "open" ? "No open orders" : "No orders yet"}</strong>
+                  <p>{ordersFilter === "open" ? "All orders are closed or voided." : "Create the first order to activate kitchen, payment, and dispatch flows."}</p>
+                </div>
+              );
+              return visible.map((order) => (
+              <div key={order.id} className={`order-card${order.status === "READY" ? " order-ready" : order.status === "VOIDED" ? " order-voided" : ""}`}>
                 <div className="order-head">
                   <div>
                     <strong>{order.orderNumber}</strong>
@@ -1317,9 +1457,14 @@ export function PosWorkspace() {
                       </p>
                     ) : null}
                   </div>
-                  {canCreateOrders && order.status === "OPEN" ? (
-                    <button onClick={() => void updateOrderStatus(order.id, "SENT_TO_KITCHEN")}>Send to kitchen</button>
-                  ) : null}
+                  <div className="inline-actions">
+                    {canCreateOrders && order.status === "OPEN" ? (
+                      <button onClick={() => void updateOrderStatus(order.id, "SENT_TO_KITCHEN")}>Send to kitchen</button>
+                    ) : null}
+                    {canCreateOrders && order.status !== "PAID" && order.status !== "VOIDED" ? (
+                      <button onClick={() => { if (window.confirm(`Cancel order ${order.orderNumber}?`)) void updateOrderStatus(order.id, "VOIDED"); }}>Cancel</button>
+                    ) : null}
+                  </div>
                 </div>
                 <ul>
                   {order.items.map((item) => (
@@ -1338,7 +1483,8 @@ export function PosWorkspace() {
                 </ul>
                 <p className="order-total">{formatCurrency(order.totals.subtotal)}</p>
               </div>
-            ))}
+              ));
+            })()}
           </div>
         </article>
 
@@ -1357,16 +1503,44 @@ export function PosWorkspace() {
               <div key={category.id}>
                 <strong>{category.name}</strong>
                 {category.items.map((item) => (
-                  <div key={item.id} className="menu-item-row">
-                    {item.photoUrl ? (
-                      <img src={item.photoUrl} alt={item.name} className="menu-thumb" />
-                    ) : null}
-                    <div>
-                      <p>
-                        {item.name} · {formatCurrency(item.price)}
-                      </p>
-                      {item.description ? <p className="menu-description">{item.description}</p> : null}
+                  <div key={item.id} className="order-card">
+                    <div className="menu-item-row">
+                      {item.photoUrl ? (
+                        <img src={item.photoUrl} alt={item.name} className="menu-thumb" />
+                      ) : null}
+                      <div>
+                        <p>
+                          {item.name} · {formatCurrency(item.price)}{!item.isAvailable ? " · Unavailable" : ""}
+                        </p>
+                        {item.description ? <p className="menu-description">{item.description}</p> : null}
+                      </div>
                     </div>
+                    {canManageRestaurant ? (
+                      <div className="inline-actions">
+                        <button onClick={() => {
+                          setEditingMenuItemId(String(item.id));
+                          setEditMenuName(item.name);
+                          setEditMenuPrice(String(item.price));
+                          setEditMenuDescription(item.description ?? "");
+                          setEditMenuIsAvailable(item.isAvailable);
+                        }}>Edit</button>
+                      </div>
+                    ) : null}
+                    {editingMenuItemId === String(item.id) ? (
+                      <div className="form-block stack">
+                        <label>Name<input value={editMenuName} onChange={(e) => setEditMenuName(e.target.value)} /></label>
+                        <label>Price<input inputMode="decimal" value={editMenuPrice} onChange={(e) => setEditMenuPrice(e.target.value)} /></label>
+                        <label>Description<input value={editMenuDescription} onChange={(e) => setEditMenuDescription(e.target.value)} /></label>
+                        <label className="checkbox-label">
+                          <input type="checkbox" checked={editMenuIsAvailable} onChange={(e) => setEditMenuIsAvailable(e.target.checked)} />
+                          Available on menu
+                        </label>
+                        <div className="inline-actions">
+                          <button onClick={() => void updateMenuItem(item.id)}>Save</button>
+                          <button onClick={() => setEditingMenuItemId("")}>Cancel</button>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 ))}
               </div>
@@ -1386,9 +1560,34 @@ export function PosWorkspace() {
                 <p>Add stock items before linking recipes or relying on payment-triggered deductions.</p>
               </div>
             ) : inventory.map((item) => (
-              <p key={item.id} className={item.lowStock ? "alert" : ""}>
-                {item.name} · {item.quantity} {item.unit}
-              </p>
+              <div key={item.id} className="order-card">
+                <p className={item.lowStock ? "alert" : ""}>
+                  {item.name} · {item.quantity} {item.unit}{item.lowStock ? " · Low stock" : ""}
+                </p>
+                {canManageRestaurant ? (
+                  <div className="inline-actions">
+                    <button onClick={() => {
+                      setEditingStockItemId(String(item.id));
+                      setEditStockName(item.name);
+                      setEditStockUnit(item.unit);
+                      setEditStockQuantity(String(item.quantity));
+                      setEditStockReorderLevel(String(item.reorderLevel));
+                    }}>Edit</button>
+                  </div>
+                ) : null}
+                {editingStockItemId === String(item.id) ? (
+                  <div className="form-block stack">
+                    <label>Name<input value={editStockName} onChange={(e) => setEditStockName(e.target.value)} /></label>
+                    <label>Unit<input value={editStockUnit} onChange={(e) => setEditStockUnit(e.target.value)} /></label>
+                    <label>Quantity<input inputMode="decimal" value={editStockQuantity} onChange={(e) => setEditStockQuantity(e.target.value)} /></label>
+                    <label>Reorder level<input inputMode="decimal" value={editStockReorderLevel} onChange={(e) => setEditStockReorderLevel(e.target.value)} /></label>
+                    <div className="inline-actions">
+                      <button onClick={() => void updateStockItem(item.id)}>Save</button>
+                      <button onClick={() => setEditingStockItemId("")}>Cancel</button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
             ))}
           </div>
           <form className="stack form-block" onSubmit={createStockItem}>
