@@ -1,7 +1,5 @@
-import { MenuManager } from "../../components/menu-manager";
-
-export const metadata = { title: "Menu Management · TableFlow" };
+import { redirect } from "next/navigation";
 
 export default function MenuPage() {
-  return <MenuManager />;
+  redirect("/management");
 }

@@ -36,6 +36,10 @@ export async function apiRequest<T>(
 
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ message: "Request failed." }));
+    if (token && response.status === 401 && typeof window !== "undefined") {
+      window.localStorage.removeItem("tableflow-session");
+      window.location.assign("/");
+    }
     throw new Error(payload.message ?? "Request failed.");
   }
 

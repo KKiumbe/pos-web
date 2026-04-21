@@ -24,13 +24,42 @@ type TableItem = {
   isActive: boolean;
 };
 
+type StockUnit = "KILOGRAM" | "GRAM" | "LITER" | "MILLILITER" | "CARTON" | "SLICE" | "PIECE" | "BOTTLE" | "PACKET";
+
 type InventoryItem = {
   id: number;
+  type: "MENU" | "CONSUMABLE";
+  menuItemId?: number | null;
+  menuItem?: { id: number; name: string } | null;
   name: string;
-  unit: string;
+  unit: StockUnit;
   quantity: number;
   reorderLevel: number;
   lowStock: boolean;
+};
+
+type RecipeDefinition = {
+  id: number;
+  menuItem: {
+    id: number;
+    name: string;
+  };
+  items: Array<{
+    id: number;
+    quantity: number;
+    unit: StockUnit;
+    stockItem: {
+      id: number;
+      name: string;
+      unit: StockUnit;
+    };
+  }>;
+};
+
+type RecipeDraftItem = {
+  stockItemId: string;
+  quantity: string;
+  unit: StockUnit;
 };
 
 type DashboardSummary = {
@@ -45,9 +74,14 @@ type DashboardSummary = {
 type Order = {
   id: number;
   orderNumber: string;
+  createdAt: string;
   type: "DINE_IN" | "TAKEAWAY";
   status: string;
   table: { id: number; label: string } | null;
+  deliveryAgentId?: number | null;
+  deliveryAgent?: DeliveryAgent | null;
+  dispatchSmsRequested?: boolean;
+  dispatchSmsSentAt?: string | null;
   customerName: string | null;
   customerPhone?: string | null;
   deliveryLocation?: string | null;
@@ -63,6 +97,15 @@ type Order = {
     subtotal: number;
     itemCount: number;
   };
+};
+
+type DeliveryAgent = {
+  id: number;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  notes: string | null;
+  isActive: boolean;
 };
 
 type Report = {
@@ -118,6 +161,12 @@ type TenantProfile = {
   brandColor?: string | null;
 };
 
+type ActivityNotice = {
+  id: number;
+  tone: "success" | "warning" | "info";
+  text: string;
+};
+
 const storageKey = "tableflow-session";
 const loginPresets = [
   { label: "Owner", sub: "Jua Kali Grill", email: "0702550190", password: "123" },
@@ -127,8 +176,31 @@ const loginPresets = [
   { label: "Delivery", sub: "Demo Restaurant", email: "delivery@demo.tableflow.app", password: "Admin@1234" }
 ];
 
+const stockUnits: Array<{ value: StockUnit; label: string }> = [
+  { value: "KILOGRAM", label: "Kilos" },
+  { value: "GRAM", label: "Grams" },
+  { value: "LITER", label: "Liters" },
+  { value: "MILLILITER", label: "Milliliters" },
+  { value: "CARTON", label: "Cartons" },
+  { value: "SLICE", label: "Slices" },
+  { value: "PIECE", label: "Pieces" },
+  { value: "BOTTLE", label: "Bottles" },
+  { value: "PACKET", label: "Packets" }
+];
+
 function formatCurrency(amount: number | null | undefined) {
   return `KES ${Number(amount ?? 0).toLocaleString()}`;
+}
+
+function formatOrderTime(iso: string | null | undefined) {
+  if (!iso) {
+    return "Time unavailable";
+  }
+
+  return new Date(iso).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit"
+  });
 }
 
 function getMessageTone(message: string): "success" | "warning" | "info" {
@@ -145,6 +217,10 @@ function getMessageTone(message: string): "success" | "warning" | "info" {
   return "info";
 }
 
+function canCancelOrder(status: string) {
+  return !["READY", "PAID", "VOIDED"].includes(status);
+}
+
 export function PosWorkspace() {
   const [session, setSession] = useState<LoginResponse | null>(null);
   const [token, setToken] = useState<string | null>(null);
@@ -153,12 +229,15 @@ export function PosWorkspace() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [tables, setTables] = useState<TableItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [allOrders, setAllOrders] = useState<Order[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
+  const [recipes, setRecipes] = useState<RecipeDefinition[]>([]);
   const [report, setReport] = useState<Report | null>(null);
   const [smsMessages, setSmsMessages] = useState<SmsMessage[]>([]);
   const [mpesaTransactions, setMpesaTransactions] = useState<MpesaTransaction[]>([]);
   const [message, setMessage] = useState<string>("");
   const [staff, setStaff] = useState<StaffMember[]>([]);
+  const [deliveryAgents, setDeliveryAgents] = useState<DeliveryAgent[]>([]);
   const [tenantProfile, setTenantProfile] = useState<TenantProfile | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -170,18 +249,22 @@ export function PosWorkspace() {
   const [customerPhone, setCustomerPhone] = useState("");
   const [deliveryLocation, setDeliveryLocation] = useState("");
   const [deliveryAddress, setDeliveryAddress] = useState("");
+  const [selectedDeliveryAgentId, setSelectedDeliveryAgentId] = useState("");
+  const [sendDispatchSms, setSendDispatchSms] = useState(true);
   const [paymentOrderId, setPaymentOrderId] = useState<string>("");
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("CASH");
   const [tableLabel, setTableLabel] = useState("");
   const [tableCapacity, setTableCapacity] = useState("4");
   const [stockName, setStockName] = useState("");
-  const [stockUnit, setStockUnit] = useState("");
+  const [stockUnit, setStockUnit] = useState<StockUnit>("KILOGRAM");
   const [stockQuantity, setStockQuantity] = useState("");
   const [stockReorderLevel, setStockReorderLevel] = useState("");
+  const [stockType, setStockType] = useState<"MENU" | "CONSUMABLE">("CONSUMABLE");
+  const [stockMenuItemId, setStockMenuItemId] = useState("");
   const [recipeMenuItemId, setRecipeMenuItemId] = useState("");
-  const [recipeStockItemId, setRecipeStockItemId] = useState("");
-  const [recipeQuantity, setRecipeQuantity] = useState("");
+  const [recipeDraftItems, setRecipeDraftItems] = useState<RecipeDraftItem[]>([{ stockItemId: "", quantity: "", unit: "GRAM" }]);
+  const [stockDrafts, setStockDrafts] = useState<Record<number, { quantity: string; reorderLevel: string }>>({});
   const [smsRecipient, setSmsRecipient] = useState("");
   const [smsText, setSmsText] = useState("");
   const [staffFirstName, setStaffFirstName] = useState("");
@@ -190,16 +273,15 @@ export function PosWorkspace() {
   const [staffPassword, setStaffPassword] = useState("");
   const [staffRole, setStaffRole] = useState("CASHIER");
   const [editingStaffId, setEditingStaffId] = useState<string>("");
-  const [editingStockItemId, setEditingStockItemId] = useState<string>("");
-  const [editStockName, setEditStockName] = useState("");
-  const [editStockUnit, setEditStockUnit] = useState("");
-  const [editStockQuantity, setEditStockQuantity] = useState("");
-  const [editStockReorderLevel, setEditStockReorderLevel] = useState("");
   const [editingMenuItemId, setEditingMenuItemId] = useState<string>("");
   const [editMenuName, setEditMenuName] = useState("");
   const [editMenuPrice, setEditMenuPrice] = useState("");
   const [editMenuDescription, setEditMenuDescription] = useState("");
   const [editMenuIsAvailable, setEditMenuIsAvailable] = useState(true);
+  const [deliveryAgentFirstName, setDeliveryAgentFirstName] = useState("");
+  const [deliveryAgentLastName, setDeliveryAgentLastName] = useState("");
+  const [deliveryAgentPhone, setDeliveryAgentPhone] = useState("");
+  const [deliveryAgentNotes, setDeliveryAgentNotes] = useState("");
   const [tenantName, setTenantName] = useState("");
   const [tenantAddress, setTenantAddress] = useState("");
   const [tenantPhone, setTenantPhone] = useState("");
@@ -210,14 +292,81 @@ export function PosWorkspace() {
   const [smsBalance, setSmsBalance] = useState<number | null>(null);
   const [orderCart, setOrderCart] = useState<Array<{ menuItemId: number; name: string; price: number; quantity: number }>>([]);
   const [menuSearch, setMenuSearch] = useState("");
-  const [ordersFilter, setOrdersFilter] = useState<"all" | "open">("open");
+  const [ordersFilter, setOrdersFilter] = useState<"today" | "open" | "history">("today");
   const [forgotMode, setForgotMode] = useState<"off" | "phone" | "otp">("off");
   const [forgotIdentifier, setForgotIdentifier] = useState("");
   const [forgotOtp, setForgotOtp] = useState("");
   const [forgotNewPassword, setForgotNewPassword] = useState("");
   const [forgotMessage, setForgotMessage] = useState("");
+  const [notices, setNotices] = useState<ActivityNotice[]>([]);
+  const [busyActions, setBusyActions] = useState<Record<string, boolean>>({});
   const [isPending, startTransition] = useTransition();
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const lowStockAlertKeyRef = useRef("");
+
+  function showNotice(text: string, tone: "success" | "warning" | "info") {
+    const id = Date.now() + Math.floor(Math.random() * 1000);
+    setNotices((current) => [...current.slice(-3), { id, text, tone }]);
+    window.setTimeout(() => {
+      setNotices((current) => current.filter((notice) => notice.id !== id));
+    }, 3600);
+  }
+
+  function startAction(actionKey: string, text: string) {
+    setBusyActions((current) => ({ ...current, [actionKey]: true }));
+    setMessage(text);
+    showNotice(text, "info");
+  }
+
+  function seedStockDrafts(items: InventoryItem[]) {
+    setStockDrafts(
+      items.reduce<Record<number, { quantity: string; reorderLevel: string }>>((accumulator, item) => {
+        accumulator[item.id] = {
+          quantity: String(item.quantity),
+          reorderLevel: String(item.reorderLevel)
+        };
+        return accumulator;
+      }, {})
+    );
+  }
+
+  function notifyLowStock(items: InventoryItem[]) {
+    const lowItems = items.filter((item) => item.lowStock || item.quantity <= item.reorderLevel);
+    if (lowItems.length === 0) {
+      lowStockAlertKeyRef.current = "";
+      return;
+    }
+
+    const alertKey = lowItems
+      .map((item) => `${item.id}:${item.quantity}:${item.reorderLevel}`)
+      .sort()
+      .join("|");
+
+    if (alertKey === lowStockAlertKeyRef.current) {
+      return;
+    }
+
+    lowStockAlertKeyRef.current = alertKey;
+    const preview = lowItems
+      .slice(0, 3)
+      .map((item) => `${item.name} (${item.quantity} ${item.unit})`)
+      .join(", ");
+    showNotice(`Low stock: ${preview}${lowItems.length > 3 ? ` and ${lowItems.length - 3} more` : ""}.`, "warning");
+  }
+
+  function createEmptyRecipeDraftItem(): RecipeDraftItem {
+    return { stockItemId: "", quantity: "", unit: "GRAM" };
+  }
+
+  function finishAction(actionKey: string, text: string, tone: "success" | "warning" | "info") {
+    setBusyActions((current) => {
+      const next = { ...current };
+      delete next[actionKey];
+      return next;
+    });
+    setMessage(text);
+    showNotice(text, tone);
+  }
 
   useEffect(() => {
     const stored = window.localStorage.getItem(storageKey);
@@ -266,6 +415,27 @@ export function PosWorkspace() {
     };
   }, [isMenuOpen]);
 
+  useEffect(() => {
+    if (!recipeMenuItemId) {
+      setRecipeDraftItems([createEmptyRecipeDraftItem()]);
+      return;
+    }
+
+    const existingRecipe = recipes.find((recipe) => recipe.menuItem.id === Number(recipeMenuItemId));
+    if (!existingRecipe) {
+      setRecipeDraftItems([createEmptyRecipeDraftItem()]);
+      return;
+    }
+
+    setRecipeDraftItems(
+      existingRecipe.items.map((item) => ({
+        stockItemId: String(item.stockItem.id),
+        quantity: String(item.quantity),
+        unit: item.unit as StockUnit
+      }))
+    );
+  }, [recipeMenuItemId, recipes]);
+
   async function loadWorkspace(activeToken: string) {
     try {
       const role = session?.user.role;
@@ -274,28 +444,53 @@ export function PosWorkspace() {
       const canManageRestaurant = role === "MANAGER";
       const canSeeInventory = role === "MANAGER" || role === "CASHIER";
       const canSeeTables = role !== "DELIVERY";
+      const canCreateOrders = role === "MANAGER" || role === "CASHIER";
 
       const requests: Promise<any>[] = [
         apiRequest<DashboardSummary>("/dashboard/summary", {}, activeToken),
         apiRequest<Category[]>("/menu/categories", {}, activeToken),
         canSeeTables ? apiRequest<TableItem[]>("/tables", {}, activeToken) : Promise.resolve([]),
         apiRequest<Order[]>("/orders", {}, activeToken),
+        apiRequest<Order[]>("/orders?scope=all", {}, activeToken),
+        canCreateOrders ? apiRequest<DeliveryAgent[]>("/delivery-agents?activeOnly=true", {}, activeToken) : Promise.resolve([]),
         canSeeInventory ? apiRequest<InventoryItem[]>("/inventory/items", {}, activeToken) : Promise.resolve([]),
+        canSeeInventory ? apiRequest<RecipeDefinition[]>("/inventory/recipes", {}, activeToken) : Promise.resolve([]),
         canSeeReports ? apiRequest<Report>("/reports/daily", {}, activeToken) : Promise.resolve(null),
         canManageRestaurant ? apiRequest<SmsMessage[]>("/integrations/sms/messages", {}, activeToken) : Promise.resolve([]),
         canManageRestaurant ? apiRequest<MpesaTransaction[]>("/integrations/mpesa/transactions", {}, activeToken) : Promise.resolve([]),
         canManageRestaurant ? apiRequest<StaffMember[]>("/staff", {}, activeToken) : Promise.resolve([]),
-        canManageRestaurant ? apiRequest<TenantProfile>("/tenant/profile", {}, activeToken) : Promise.resolve(null)
+        canManageRestaurant ? apiRequest<TenantProfile>("/tenant/profile", {}, activeToken) : Promise.resolve(null),
+        canManageRestaurant ? apiRequest<DeliveryAgent[]>("/delivery-agents", {}, activeToken) : Promise.resolve([])
       ];
 
-      const [summaryData, menuData, tablesData, ordersData, inventoryData, reportData, smsData, mpesaData, staffData, tenantData] =
+      const [
+        summaryData,
+        menuData,
+        tablesData,
+        ordersData,
+        allOrdersData,
+        activeDeliveryAgentsData,
+        inventoryData,
+        recipeData,
+        reportData,
+        smsData,
+        mpesaData,
+        staffData,
+        tenantData,
+        managedDeliveryAgentsData
+      ] =
         await Promise.all(requests);
 
       setSummary(summaryData);
       setCategories(menuData);
       setTables(tablesData);
       setOrders(ordersData);
+      setAllOrders(allOrdersData);
+      setDeliveryAgents(canManageRestaurant ? managedDeliveryAgentsData : activeDeliveryAgentsData);
       setInventory(inventoryData);
+      setRecipes(recipeData);
+      seedStockDrafts(inventoryData);
+      notifyLowStock(inventoryData);
       setReport(reportData);
       setSmsMessages(smsData);
       setMpesaTransactions(mpesaData);
@@ -316,7 +511,10 @@ export function PosWorkspace() {
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setMessage("Signing in...");
+    if (busyActions.login) {
+      return;
+    }
+    startAction("login", "Signing in...");
 
     startTransition(async () => {
       try {
@@ -328,8 +526,9 @@ export function PosWorkspace() {
         setSession(login);
         setToken(login.token);
         window.localStorage.setItem(storageKey, JSON.stringify({ ...login, token: login.token }));
+        finishAction("login", "Signed in successfully.", "success");
       } catch (error) {
-        setMessage(error instanceof Error ? error.message : "Sign in failed.");
+        finishAction("login", error instanceof Error ? error.message : "Sign in failed.", "warning");
       }
     });
   }
@@ -337,6 +536,10 @@ export function PosWorkspace() {
   async function handleForgotPassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!forgotIdentifier.trim()) return;
+    if (busyActions.forgotPassword) {
+      return;
+    }
+    startAction("forgotPassword", "Sending OTP...");
     setForgotMessage("Sending OTP...");
     try {
       await apiRequest("/auth/forgot-password", {
@@ -345,14 +548,21 @@ export function PosWorkspace() {
       });
       setForgotMessage("OTP sent via SMS. Enter it below.");
       setForgotMode("otp");
+      finishAction("forgotPassword", "OTP sent via SMS.", "success");
     } catch (error) {
-      setForgotMessage(error instanceof Error ? error.message : "Unable to send OTP.");
+      const nextMessage = error instanceof Error ? error.message : "Unable to send OTP.";
+      setForgotMessage(nextMessage);
+      finishAction("forgotPassword", nextMessage, "warning");
     }
   }
 
   async function handleResetPassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!forgotOtp.trim() || !forgotNewPassword) return;
+    if (busyActions.resetPassword) {
+      return;
+    }
+    startAction("resetPassword", "Resetting password...");
     setForgotMessage("Resetting...");
     try {
       await apiRequest("/auth/reset-password", {
@@ -360,6 +570,7 @@ export function PosWorkspace() {
         body: JSON.stringify({ identifier: forgotIdentifier.trim().toLowerCase(), otp: forgotOtp.trim(), newPassword: forgotNewPassword })
       });
       setForgotMessage("Password reset! You can now sign in.");
+      finishAction("resetPassword", "Password reset successfully.", "success");
       setTimeout(() => {
         setForgotMode("off");
         setForgotIdentifier("");
@@ -368,7 +579,9 @@ export function PosWorkspace() {
         setForgotMessage("");
       }, 2500);
     } catch (error) {
-      setForgotMessage(error instanceof Error ? error.message : "Reset failed.");
+      const nextMessage = error instanceof Error ? error.message : "Reset failed.";
+      setForgotMessage(nextMessage);
+      finishAction("resetPassword", nextMessage, "warning");
     }
   }
 
@@ -402,10 +615,15 @@ export function PosWorkspace() {
     event.preventDefault();
     if (!token || orderCart.length === 0) {
       setMessage("Add at least one item to the order.");
+      showNotice("Add at least one item to the order.", "warning");
+      return;
+    }
+    if (busyActions.createOrder) {
       return;
     }
 
     try {
+      startAction("createOrder", "Creating order...");
       await apiRequest(
         "/orders",
         {
@@ -417,24 +635,29 @@ export function PosWorkspace() {
             customerPhone: customerPhone || null,
             deliveryLocation: orderMode === "TAKEAWAY" ? deliveryLocation || null : null,
             deliveryAddress: orderMode === "TAKEAWAY" ? deliveryAddress || null : null,
+            deliveryAgentId: orderMode === "TAKEAWAY" && selectedDeliveryAgentId ? Number(selectedDeliveryAgentId) : null,
+            dispatchSmsRequested: orderMode === "TAKEAWAY" && selectedDeliveryAgentId ? sendDispatchSms : false,
             items: orderCart.map((entry) => ({ menuItemId: entry.menuItemId, quantity: entry.quantity }))
           })
         },
         token
       );
 
-      setMessage("Order created.");
       setOrderCart([]);
       setSelectedMenuItemId("");
+      setMenuSearch("");
       setQuantity("1");
       setCustomerName("");
       setCustomerPhone("");
       setDeliveryLocation("");
       setDeliveryAddress("");
+      setSelectedDeliveryAgentId("");
+      setSendDispatchSms(true);
       setPaymentAmount("");
       await loadWorkspace(token);
+      finishAction("createOrder", "Order created successfully.", "success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to create order.");
+      finishAction("createOrder", error instanceof Error ? error.message : "Unable to create order.", "warning");
     }
   }
 
@@ -442,8 +665,13 @@ export function PosWorkspace() {
     if (!token) {
       return;
     }
+    const actionKey = `kitchen-${orderId}-${itemId}-${status}`;
+    if (busyActions[actionKey]) {
+      return;
+    }
 
     try {
+      startAction(actionKey, "Updating kitchen status...");
       await apiRequest(
         `/orders/${orderId}/items/${itemId}/status`,
         {
@@ -453,10 +681,10 @@ export function PosWorkspace() {
         token
       );
 
-      setMessage("Kitchen status updated.");
       await loadWorkspace(token);
+      finishAction(actionKey, "Kitchen status updated.", "success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to update kitchen status.");
+      finishAction(actionKey, error instanceof Error ? error.message : "Unable to update kitchen status.", "warning");
     }
   }
 
@@ -464,8 +692,13 @@ export function PosWorkspace() {
     if (!token) {
       return;
     }
+    const actionKey = `order-${orderId}-${status}`;
+    if (busyActions[actionKey]) {
+      return;
+    }
 
     try {
+      startAction(actionKey, "Updating order...");
       await apiRequest(
         `/orders/${orderId}/status`,
         {
@@ -475,10 +708,10 @@ export function PosWorkspace() {
         token
       );
 
-      setMessage("Order status updated.");
       await loadWorkspace(token);
+      finishAction(actionKey, "Order status updated.", "success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to update order status.");
+      finishAction(actionKey, error instanceof Error ? error.message : "Unable to update order status.", "warning");
     }
   }
 
@@ -487,8 +720,12 @@ export function PosWorkspace() {
     if (!token || !paymentOrderId || !paymentAmount) {
       return;
     }
+    if (busyActions.recordPayment) {
+      return;
+    }
 
     try {
+      startAction("recordPayment", "Recording payment...");
       await apiRequest(
         "/payments",
         {
@@ -502,11 +739,11 @@ export function PosWorkspace() {
         token
       );
 
-      setMessage("Payment recorded.");
       setPaymentAmount("");
       await loadWorkspace(token);
+      finishAction("recordPayment", "Payment received and recorded.", "success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to record payment.");
+      finishAction("recordPayment", error instanceof Error ? error.message : "Unable to record payment.", "warning");
     }
   }
 
@@ -516,7 +753,11 @@ export function PosWorkspace() {
       return;
     }
 
+    if (busyActions.createTable) {
+      return;
+    }
     try {
+      startAction("createTable", "Creating table...");
       await apiRequest(
         "/tables",
         {
@@ -531,27 +772,33 @@ export function PosWorkspace() {
 
       setTableLabel("");
       setTableCapacity("4");
-      setMessage("Table created.");
       await loadWorkspace(token);
+      finishAction("createTable", "Table created successfully.", "success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to create table.");
+      finishAction("createTable", error instanceof Error ? error.message : "Unable to create table.", "warning");
     }
   }
 
   async function createStockItem(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!token || !stockName || !stockUnit || !stockQuantity) {
+    if (!token || !stockName || !stockUnit || !stockQuantity || (stockType === "MENU" && !stockMenuItemId)) {
       setMessage("Stock item name, unit, and quantity are required.");
       return;
     }
 
+    if (busyActions.createStockItem) {
+      return;
+    }
     try {
+      startAction("createStockItem", "Saving stock item...");
       await apiRequest(
         "/inventory/items",
         {
           method: "POST",
           body: JSON.stringify({
             name: stockName,
+            type: stockType,
+            menuItemId: stockType === "MENU" ? Number(stockMenuItemId) : null,
             unit: stockUnit,
             quantity: Number(stockQuantity),
             reorderLevel: Number(stockReorderLevel || 0)
@@ -561,37 +808,15 @@ export function PosWorkspace() {
       );
 
       setStockName("");
-      setStockUnit("");
+      setStockUnit("KILOGRAM");
       setStockQuantity("");
       setStockReorderLevel("");
-      setMessage("Stock item created.");
+      setStockType("CONSUMABLE");
+      setStockMenuItemId("");
       await loadWorkspace(token);
+      finishAction("createStockItem", "Stock item created successfully.", "success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to create stock item.");
-    }
-  }
-
-  async function updateStockItem(itemId: number) {
-    if (!token) return;
-    try {
-      await apiRequest(
-        `/inventory/items/${itemId}`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({
-            name: editStockName,
-            unit: editStockUnit,
-            quantity: Number(editStockQuantity),
-            reorderLevel: Number(editStockReorderLevel || 0)
-          })
-        },
-        token
-      );
-      setEditingStockItemId("");
-      setMessage("Stock item updated.");
-      await loadWorkspace(token);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to update stock item.");
+      finishAction("createStockItem", error instanceof Error ? error.message : "Unable to create stock item.", "warning");
     }
   }
 
@@ -619,30 +844,108 @@ export function PosWorkspace() {
     }
   }
 
-  async function createRecipe(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!token || !recipeMenuItemId || !recipeStockItemId || !recipeQuantity) {
+  function updateStockDraft(itemId: number, patch: Partial<{ quantity: string; reorderLevel: string }>) {
+    setStockDrafts((current) => ({
+      ...current,
+      [itemId]: {
+        quantity: current[itemId]?.quantity ?? "",
+        reorderLevel: current[itemId]?.reorderLevel ?? "",
+        ...patch
+      }
+    }));
+  }
+
+  async function saveStockItem(itemId: number) {
+    if (!token) {
+      return;
+    }
+
+    const draft = stockDrafts[itemId];
+    if (!draft) {
+      return;
+    }
+
+    const actionKey = `stock-item-${itemId}`;
+    if (busyActions[actionKey]) {
       return;
     }
 
     try {
+      startAction(actionKey, "Updating stock item...");
+      await apiRequest(
+        `/inventory/items/${itemId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            quantity: Number(draft.quantity),
+            reorderLevel: Number(draft.reorderLevel)
+          })
+        },
+        token
+      );
+
+      await loadWorkspace(token);
+      finishAction(actionKey, "Stock item updated.", "success");
+    } catch (error) {
+      finishAction(actionKey, error instanceof Error ? error.message : "Unable to update stock item.", "warning");
+    }
+  }
+
+  function addRecipeDraftItem() {
+    setRecipeDraftItems((current) => [...current, createEmptyRecipeDraftItem()]);
+  }
+
+  function updateRecipeDraftItem(index: number, patch: Partial<RecipeDraftItem>) {
+    setRecipeDraftItems((current) =>
+      current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item))
+    );
+  }
+
+  function removeRecipeDraftItem(index: number) {
+    setRecipeDraftItems((current) =>
+      current.length === 1 ? [createEmptyRecipeDraftItem()] : current.filter((_, itemIndex) => itemIndex !== index)
+    );
+  }
+
+  async function createRecipe(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!token || !recipeMenuItemId) {
+      return;
+    }
+
+    const recipeItems = recipeDraftItems
+      .filter((item) => item.stockItemId && item.quantity)
+      .map((item) => ({
+        stockItemId: Number(item.stockItemId),
+        quantity: Number(item.quantity),
+        unit: item.unit
+      }));
+
+    if (recipeItems.length === 0) {
+      return;
+    }
+
+    if (busyActions.createRecipe) {
+      return;
+    }
+    try {
+      startAction("createRecipe", "Saving recipe...");
       await apiRequest(
         "/inventory/recipes",
         {
           method: "POST",
           body: JSON.stringify({
             menuItemId: Number(recipeMenuItemId),
-            items: [{ stockItemId: Number(recipeStockItemId), quantity: Number(recipeQuantity) }]
+            items: recipeItems
           })
         },
         token
       );
 
-      setRecipeQuantity("");
-      setMessage("Recipe saved.");
       await loadWorkspace(token);
+      finishAction("createRecipe", "Recipe saved successfully.", "success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to save recipe.");
+      finishAction("createRecipe", error instanceof Error ? error.message : "Unable to save recipe.", "warning");
     }
   }
 
@@ -652,7 +955,11 @@ export function PosWorkspace() {
       return;
     }
 
+    if (busyActions.sendSms) {
+      return;
+    }
     try {
+      startAction("sendSms", "Sending SMS...");
       await apiRequest(
         "/integrations/sms/messages",
         {
@@ -667,10 +974,10 @@ export function PosWorkspace() {
 
       setSmsRecipient("");
       setSmsText("");
-      setMessage("SMS sent through mock provider.");
       await loadWorkspace(token);
+      finishAction("sendSms", "SMS sent successfully.", "success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to send SMS.");
+      finishAction("sendSms", error instanceof Error ? error.message : "Unable to send SMS.", "warning");
     }
   }
 
@@ -679,8 +986,12 @@ export function PosWorkspace() {
     if (!token) {
       return;
     }
+    if (busyActions.createStaffMember) {
+      return;
+    }
 
     try {
+      startAction("createStaffMember", "Creating staff member...");
       await apiRequest(
         "/staff",
         {
@@ -701,10 +1012,93 @@ export function PosWorkspace() {
       setStaffEmail("");
       setStaffPassword("");
       setStaffRole("CASHIER");
-      setMessage("Staff member created.");
       await loadWorkspace(token);
+      finishAction("createStaffMember", "Staff member created successfully.", "success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to create staff member.");
+      finishAction("createStaffMember", error instanceof Error ? error.message : "Unable to create staff member.", "warning");
+    }
+  }
+
+  async function createDeliveryAgent(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!token) {
+      return;
+    }
+    if (busyActions.createDeliveryAgent) {
+      return;
+    }
+
+    try {
+      startAction("createDeliveryAgent", "Creating delivery profile...");
+      await apiRequest(
+        "/delivery-agents",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            firstName: deliveryAgentFirstName,
+            lastName: deliveryAgentLastName,
+            phone: deliveryAgentPhone,
+            notes: deliveryAgentNotes || null
+          })
+        },
+        token
+      );
+
+      setDeliveryAgentFirstName("");
+      setDeliveryAgentLastName("");
+      setDeliveryAgentPhone("");
+      setDeliveryAgentNotes("");
+      await loadWorkspace(token);
+      finishAction("createDeliveryAgent", "Delivery profile created successfully.", "success");
+    } catch (error) {
+      finishAction("createDeliveryAgent", error instanceof Error ? error.message : "Unable to create delivery profile.", "warning");
+    }
+  }
+
+  async function updateDeliveryAgent(agentId: number, isActive: boolean) {
+    if (!token) {
+      return;
+    }
+    const actionKey = `delivery-agent-${agentId}`;
+    if (busyActions[actionKey]) {
+      return;
+    }
+
+    try {
+      startAction(actionKey, "Updating delivery profile...");
+      await apiRequest(
+        `/delivery-agents/${agentId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            isActive: !isActive
+          })
+        },
+        token
+      );
+      await loadWorkspace(token);
+      finishAction(actionKey, "Delivery profile updated.", "success");
+    } catch (error) {
+      finishAction(actionKey, error instanceof Error ? error.message : "Unable to update delivery profile.", "warning");
+    }
+  }
+
+  async function updateStaffRole(memberId: number, role: string) {
+    if (!token) return;
+    const actionKey = `staff-role-${memberId}`;
+    if (busyActions[actionKey]) return;
+
+    try {
+      startAction(actionKey, "Updating role...");
+      await apiRequest(
+        `/staff/${memberId}`,
+        { method: "PATCH", body: JSON.stringify({ role }) },
+        token
+      );
+      await loadWorkspace(token);
+      finishAction(actionKey, "Role updated.", "success");
+    } catch (error) {
+      finishAction(actionKey, error instanceof Error ? error.message : "Unable to update role.", "warning");
     }
   }
 
@@ -712,8 +1106,13 @@ export function PosWorkspace() {
     if (!token) {
       return;
     }
+    const actionKey = `staff-status-${memberId}`;
+    if (busyActions[actionKey]) {
+      return;
+    }
 
     try {
+      startAction(actionKey, "Updating staff status...");
       await apiRequest(
         `/staff/${memberId}`,
         {
@@ -724,10 +1123,10 @@ export function PosWorkspace() {
         },
         token
       );
-      setMessage("Staff status updated.");
       await loadWorkspace(token);
+      finishAction(actionKey, "Staff status updated.", "success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to update staff member.");
+      finishAction(actionKey, error instanceof Error ? error.message : "Unable to update staff member.", "warning");
     }
   }
 
@@ -735,8 +1134,13 @@ export function PosWorkspace() {
     if (!token || !staffPassword) {
       return;
     }
+    const actionKey = `staff-password-${memberId}`;
+    if (busyActions[actionKey]) {
+      return;
+    }
 
     try {
+      startAction(actionKey, "Updating password...");
       await apiRequest(
         `/staff/${memberId}`,
         {
@@ -748,10 +1152,10 @@ export function PosWorkspace() {
         token
       );
       setStaffPassword("");
-      setMessage("Staff password updated.");
       await loadWorkspace(token);
+      finishAction(actionKey, "Staff password updated.", "success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to reset password.");
+      finishAction(actionKey, error instanceof Error ? error.message : "Unable to reset password.", "warning");
     }
   }
 
@@ -760,8 +1164,12 @@ export function PosWorkspace() {
     if (!token) {
       return;
     }
+    if (busyActions.updateTenantProfile) {
+      return;
+    }
 
     try {
+      startAction("updateTenantProfile", "Saving restaurant profile...");
       await apiRequest(
         "/tenant/profile",
         {
@@ -778,10 +1186,10 @@ export function PosWorkspace() {
         },
         token
       );
-      setMessage("Restaurant profile updated.");
       await loadWorkspace(token);
+      finishAction("updateTenantProfile", "Restaurant profile updated.", "success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to update restaurant profile.");
+      finishAction("updateTenantProfile", error instanceof Error ? error.message : "Unable to update restaurant profile.", "warning");
     }
   }
 
@@ -792,9 +1200,11 @@ export function PosWorkspace() {
     setSession(null);
     setSummary(null);
     setOrders([]);
+    setAllOrders([]);
     setSmsMessages([]);
     setMpesaTransactions([]);
     setStaff([]);
+    setDeliveryAgents([]);
     setTenantProfile(null);
     setMessage("Signed out.");
   }
@@ -856,6 +1266,7 @@ export function PosWorkspace() {
                   <p><strong>Location:</strong> ${order.deliveryLocation ?? "-"}</p>
                   <p><strong>Address:</strong> ${order.deliveryAddress ?? "-"}</p>
                   <p><strong>Customer Phone:</strong> ${order.customerPhone ?? "-"}</p>
+                  <p><strong>Delivery Person:</strong> ${order.deliveryAgent ? `${order.deliveryAgent.firstName} ${order.deliveryAgent.lastName} · ${order.deliveryAgent.phone}` : "-"}</p>
                 </div>`
               : ""
           }
@@ -885,9 +1296,23 @@ export function PosWorkspace() {
       name: item.name,
       category: category.name,
       price: item.price,
+      description: item.description ?? "",
       label: `${category.name} · ${item.name} · KES ${item.price}`
     }))
   );
+  const normalizedMenuSearch = menuSearch.toLowerCase().replace(/\s+/g, " ").trim();
+  const filteredOrderMenuOptions = normalizedMenuSearch
+    ? menuOptions
+        .filter((item) => `${item.name} ${item.category} ${item.description}`.toLowerCase().includes(normalizedMenuSearch))
+        .sort((a, b) => {
+          const aName = a.name.toLowerCase();
+          const bName = b.name.toLowerCase();
+          const aStarts = aName.startsWith(normalizedMenuSearch) ? 0 : 1;
+          const bStarts = bName.startsWith(normalizedMenuSearch) ? 0 : 1;
+          return aStarts === bStarts ? aName.localeCompare(bName) : aStarts - bStarts;
+        })
+        .slice(0, 12)
+    : [];
   const role = session?.user.role;
   const canCreateOrders = role === "MANAGER" || role === "CASHIER";
   const canTakePayments = canCreateOrders;
@@ -899,16 +1324,19 @@ export function PosWorkspace() {
   const openTakeawayOrders = orders.filter((order) => order.type === "TAKEAWAY" && order.status !== "PAID").length;
   const activeLowStockItems = inventory.filter((item) => item.lowStock).length;
   const latestTransactions = mpesaTransactions.slice(0, 3);
+  const selectedRecipe = recipes.find((recipe) => recipe.menuItem.id === Number(recipeMenuItemId)) ?? null;
+  const managementLinks = [
+    canSeeReports ? { id: "reports", label: "Reports" } : null,
+    canManageRestaurant ? { id: "restaurant-admin", label: "Restaurant Admin" } : null,
+    canManageRestaurant ? { id: "staff", label: "Staff" } : null
+  ].filter(Boolean) as Array<{ id: string; label: string }>;
   const sectionLinks = [
     canCreateOrders ? { id: "new-order", label: "New Order" } : null,
     canTakePayments ? { id: "payments", label: "Payments" } : null,
     { id: "orders", label: "Orders" },
     { id: "menu", label: "Menu" },
     canSeeInventory ? { id: "inventory", label: "Inventory" } : null,
-    canSeeReports ? { id: "reports", label: "Reports" } : null,
-    canManageRestaurant ? { id: "restaurant-admin", label: "Restaurant Admin" } : null,
     canManageRestaurant ? { id: "tables-alerts", label: "Tables" } : null,
-    canManageRestaurant ? { id: "staff", label: "Staff" } : null,
     { id: "print-invoice", label: "Print Invoice" }
   ].filter(Boolean) as Array<{ id: string; label: string }>;
 
@@ -1006,8 +1434,8 @@ export function PosWorkspace() {
                       placeholder="••••••••"
                     />
                   </label>
-                  <button type="submit" disabled={isPending} className="auth-submit-btn">
-                    {isPending ? "Signing in..." : "Enter workspace"}
+                  <button type="submit" disabled={isPending || busyActions.login} className="auth-submit-btn">
+                    {isPending || busyActions.login ? "Signing in..." : "Enter workspace"}
                   </button>
                 </form>
                 <button
@@ -1035,7 +1463,9 @@ export function PosWorkspace() {
                       placeholder="e.g. 0702550190"
                     />
                   </label>
-                  <button type="submit" className="auth-submit-btn">Send OTP</button>
+                  <button type="submit" className="auth-submit-btn" disabled={busyActions.forgotPassword}>
+                    {busyActions.forgotPassword ? "Sending..." : "Send OTP"}
+                  </button>
                 </form>
                 {forgotMessage ? <p className="auth-status" data-tone={getMessageTone(forgotMessage)}>{forgotMessage}</p> : null}
                 <button type="button" className="forgot-link" onClick={() => { setForgotMode("off"); setForgotMessage(""); }}>← Back to sign in</button>
@@ -1068,7 +1498,9 @@ export function PosWorkspace() {
                       placeholder="new password"
                     />
                   </label>
-                  <button type="submit" className="auth-submit-btn">Reset password</button>
+                  <button type="submit" className="auth-submit-btn" disabled={busyActions.resetPassword}>
+                    {busyActions.resetPassword ? "Resetting..." : "Reset password"}
+                  </button>
                 </form>
                 {forgotMessage ? <p className="auth-status" data-tone={getMessageTone(forgotMessage)}>{forgotMessage}</p> : null}
                 <button type="button" className="forgot-link" onClick={() => { setForgotMode("phone"); setForgotMessage(""); }}>← Resend OTP</button>
@@ -1168,6 +1600,17 @@ export function PosWorkspace() {
         <span className="status-pill">{isPending ? "Refreshing" : "Ready"}</span>
       </section>
 
+      {notices.length ? (
+        <section className="activity-stack" aria-live="polite" aria-label="Recent activity">
+          {notices.map((notice) => (
+            <div key={notice.id} className="activity-toast" data-tone={notice.tone}>
+              <strong>{notice.tone === "info" ? "Working" : notice.tone === "success" ? "Success" : "Attention"}</strong>
+              <p>{notice.text}</p>
+            </div>
+          ))}
+        </section>
+      ) : null}
+
       <section className="stat-strip">
         <div className="stat-chip">
           <span>Takeaway pipeline</span>
@@ -1189,10 +1632,22 @@ export function PosWorkspace() {
             {section.label}
           </a>
         ))}
-        {canManageRestaurant ? (
-          <a href="/menu" className="section-chip" style={{ color: "var(--primary)", fontWeight: 600 }}>
-            Menu Management →
-          </a>
+        {managementLinks.length ? (
+          <details className="section-menu">
+            <summary className="section-chip">Management</summary>
+            <div className="section-menu-dropdown">
+              {managementLinks.map((section) => (
+                <a key={section.id} href={`#${section.id}`} className="section-menu-item">
+                  {section.label}
+                </a>
+              ))}
+              {canManageRestaurant ? (
+                <a href="/management" className="section-menu-item section-menu-link">
+                  Open management workspace
+                </a>
+              ) : null}
+            </div>
+          </details>
         ) : null}
       </nav>
 
@@ -1271,6 +1726,26 @@ export function PosWorkspace() {
                     Delivery address
                     <input placeholder="e.g. Westlands, Nairobi" value={deliveryAddress} onChange={(event) => setDeliveryAddress(event.target.value)} />
                   </label>
+                  <label>
+                    Delivery person
+                    <select value={selectedDeliveryAgentId} onChange={(event) => setSelectedDeliveryAgentId(event.target.value)}>
+                      <option value="">Select delivery person</option>
+                      {deliveryAgents.filter((agent) => agent.isActive).map((agent) => (
+                        <option key={agent.id} value={agent.id}>
+                          {agent.firstName} {agent.lastName} · {agent.phone}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <input
+                      type="checkbox"
+                      checked={sendDispatchSms}
+                      onChange={(event) => setSendDispatchSms(event.target.checked)}
+                      disabled={!selectedDeliveryAgentId}
+                    />
+                    <span>Send pickup SMS now</span>
+                  </label>
                 </div>
               )}
             </div>
@@ -1288,7 +1763,10 @@ export function PosWorkspace() {
                   />
                   {menuSearch.trim() && !selectedMenuItemId && (
                     <ul className="menu-search-results">
-                      {menuOptions.filter((item) => `${item.name} ${item.category}`.toLowerCase().includes(menuSearch.toLowerCase())).map((item) => (
+                      {filteredOrderMenuOptions.length === 0 ? (
+                        <li className="search-empty">No matching available menu items</li>
+                      ) : null}
+                      {filteredOrderMenuOptions.map((item) => (
                         <li key={item.id} onClick={() => { setSelectedMenuItemId(String(item.id)); setMenuSearch(item.name); }}>
                           <span className="search-item-name">{item.name}</span>
                           <span className="search-item-meta">{item.category} · KES {item.price.toLocaleString()}</span>
@@ -1325,8 +1803,10 @@ export function PosWorkspace() {
               )}
             </div>
 
-            <button type="submit" disabled={orderCart.length === 0}>
-              Place order{orderCart.length > 0 ? ` · ${orderCart.reduce((n, e) => n + e.quantity, 0)} item${orderCart.reduce((n, e) => n + e.quantity, 0) !== 1 ? "s" : ""}` : ""}
+            <button type="submit" disabled={busyActions.createOrder || orderCart.length === 0}>
+              {busyActions.createOrder
+                ? "Creating order..."
+                : `Place order${orderCart.length > 0 ? ` · ${orderCart.reduce((n, e) => n + e.quantity, 0)} item${orderCart.reduce((n, e) => n + e.quantity, 0) !== 1 ? "s" : ""}` : ""}`}
             </button>
           </form>
         </article> : null}
@@ -1359,7 +1839,9 @@ export function PosWorkspace() {
               Amount
               <input inputMode="decimal" value={paymentAmount} onChange={(event) => setPaymentAmount(event.target.value)} />
             </label>
-            <button type="submit">Record payment</button>
+            <button type="submit" disabled={busyActions.recordPayment}>
+              {busyActions.recordPayment ? "Recording..." : "Record payment"}
+            </button>
           </form>
         </article> : null}
 
@@ -1393,7 +1875,9 @@ export function PosWorkspace() {
               Brand color
               <input value={tenantBrandColor} onChange={(event) => setTenantBrandColor(event.target.value)} />
             </label>
-            <button type="submit">Save restaurant profile</button>
+            <button type="submit" disabled={busyActions.updateTenantProfile}>
+              {busyActions.updateTenantProfile ? "Saving..." : "Save restaurant profile"}
+            </button>
           </form>
           <form className="stack form-block" onSubmit={createStaffMember}>
             <label>
@@ -1421,7 +1905,30 @@ export function PosWorkspace() {
                 <option value="DELIVERY">Delivery</option>
               </select>
             </label>
-            <button type="submit">Add staff member</button>
+            <button type="submit" disabled={busyActions.createStaffMember}>
+              {busyActions.createStaffMember ? "Creating..." : "Add staff member"}
+            </button>
+          </form>
+          <form className="stack form-block" onSubmit={createDeliveryAgent}>
+            <label>
+              Delivery first name
+              <input value={deliveryAgentFirstName} onChange={(event) => setDeliveryAgentFirstName(event.target.value)} />
+            </label>
+            <label>
+              Delivery last name
+              <input value={deliveryAgentLastName} onChange={(event) => setDeliveryAgentLastName(event.target.value)} />
+            </label>
+            <label>
+              Delivery phone
+              <input type="tel" autoComplete="tel" value={deliveryAgentPhone} onChange={(event) => setDeliveryAgentPhone(event.target.value)} />
+            </label>
+            <label>
+              Notes
+              <input value={deliveryAgentNotes} onChange={(event) => setDeliveryAgentNotes(event.target.value)} placeholder="Coverage area, bike, availability..." />
+            </label>
+            <button type="submit" disabled={busyActions.createDeliveryAgent}>
+              {busyActions.createDeliveryAgent ? "Creating..." : "Add delivery profile"}
+            </button>
           </form>
         </article> : null}
 
@@ -1431,16 +1938,26 @@ export function PosWorkspace() {
             <p>Monitor live order flow, advance service state, and act on kitchen items.</p>
           </div>
           <div className="tab-bar">
+            <button type="button" className={`tab-btn${ordersFilter === "today" ? " tab-active" : ""}`} onClick={() => setOrdersFilter("today")}>Today</button>
             <button type="button" className={`tab-btn${ordersFilter === "open" ? " tab-active" : ""}`} onClick={() => setOrdersFilter("open")}>Open</button>
-            <button type="button" className={`tab-btn${ordersFilter === "all" ? " tab-active" : ""}`} onClick={() => setOrdersFilter("all")}>All</button>
+            <button type="button" className={`tab-btn${ordersFilter === "history" ? " tab-active" : ""}`} onClick={() => setOrdersFilter("history")}>History</button>
           </div>
           <div className="order-list">
             {(() => {
-              const visible = ordersFilter === "open" ? orders.filter((o) => o.status !== "PAID" && o.status !== "VOIDED") : orders;
+              const isKitchenOnly = canKitchenUpdate && !canCreateOrders;
+              const visible = ordersFilter === "history"
+                ? allOrders
+                : ordersFilter === "open"
+                  ? orders.filter((o) => {
+                    if (o.status === "PAID" || o.status === "VOIDED") return false;
+                    if (isKitchenOnly && o.status === "READY") return false;
+                    return true;
+                  })
+                  : orders;
               if (visible.length === 0) return (
                 <div className="empty-state">
-                  <strong>{ordersFilter === "open" ? "No open orders" : "No orders yet"}</strong>
-                  <p>{ordersFilter === "open" ? "All orders are closed or voided." : "Create the first order to activate kitchen, payment, and dispatch flows."}</p>
+                  <strong>{ordersFilter === "open" ? "No open orders today" : ordersFilter === "history" ? "No order history" : "No orders today"}</strong>
+                  <p>{ordersFilter === "open" ? "All current-day orders are closed or voided." : ordersFilter === "history" ? "Past and current orders will appear here after service activity." : "Create the first order to activate today’s kitchen, payment, and dispatch flows."}</p>
                 </div>
               );
               return visible.map((order) => (
@@ -1449,23 +1966,35 @@ export function PosWorkspace() {
                   <div>
                     <strong>{order.orderNumber}</strong>
                     <p>
-                      {order.type} · {order.status} {order.table ? `· ${order.table.label}` : ""}
+                      {order.type} · {order.status} · Placed {formatOrderTime(order.createdAt)} {order.table ? `· ${order.table.label}` : ""}
                     </p>
                     {order.type === "TAKEAWAY" ? (
-                      <p>
-                        {order.deliveryLocation ?? "-"} · {order.deliveryAddress ?? "-"}
-                      </p>
+                      <>
+                        <p>
+                          {order.deliveryLocation ?? "-"} · {order.deliveryAddress ?? "-"}
+                        </p>
+                        <p>
+                          Courier: {order.deliveryAgent ? `${order.deliveryAgent.firstName} ${order.deliveryAgent.lastName}` : "Unassigned"} · Dispatch SMS: {order.dispatchSmsRequested ? (order.dispatchSmsSentAt ? "Sent" : "Queued") : "Off"}
+                        </p>
+                      </>
                     ) : null}
                   </div>
-                  <div className="inline-actions">
-                    {canCreateOrders && order.status === "OPEN" ? (
-                      <button onClick={() => void updateOrderStatus(order.id, "SENT_TO_KITCHEN")}>Send to kitchen</button>
-                    ) : null}
-                    {canCreateOrders && order.status !== "PAID" && order.status !== "VOIDED" ? (
-                      <button onClick={() => { if (window.confirm(`Cancel order ${order.orderNumber}?`)) void updateOrderStatus(order.id, "VOIDED"); }}>Cancel</button>
-                    ) : null}
-                  </div>
+                  {canCreateOrders && order.status === "OPEN" ? (
+                    <button disabled={busyActions[`order-${order.id}-SENT_TO_KITCHEN`]} onClick={() => void updateOrderStatus(order.id, "SENT_TO_KITCHEN")}>
+                      {busyActions[`order-${order.id}-SENT_TO_KITCHEN`] ? "Sending..." : "Send to kitchen"}
+                    </button>
+                  ) : null}
                 </div>
+                {canCreateOrders && canCancelOrder(order.status) ? (
+                  <div className="inline-actions" style={{ marginTop: 12 }}>
+                    <button
+                      disabled={busyActions[`order-${order.id}-VOIDED`]}
+                      onClick={() => void updateOrderStatus(order.id, "VOIDED")}
+                    >
+                      {busyActions[`order-${order.id}-VOIDED`] ? "Cancelling..." : "Cancel order"}
+                    </button>
+                  </div>
+                ) : null}
                 <ul>
                   {order.items.map((item) => (
                     <li key={item.id}>
@@ -1474,8 +2003,12 @@ export function PosWorkspace() {
                       </span>
                       {canKitchenUpdate ? (
                         <div className="inline-actions">
-                          <button onClick={() => void updateKitchenStatus(order.id, item.id, "PREPARING")}>Prep</button>
-                          <button onClick={() => void updateKitchenStatus(order.id, item.id, "READY")}>Ready</button>
+                          <button disabled={busyActions[`kitchen-${order.id}-${item.id}-PREPARING`]} onClick={() => void updateKitchenStatus(order.id, item.id, "PREPARING")}>
+                            {busyActions[`kitchen-${order.id}-${item.id}-PREPARING`] ? "Saving..." : "Prep"}
+                          </button>
+                          <button disabled={busyActions[`kitchen-${order.id}-${item.id}-READY`]} onClick={() => void updateKitchenStatus(order.id, item.id, "READY")}>
+                            {busyActions[`kitchen-${order.id}-${item.id}-READY`] ? "Saving..." : "Ready"}
+                          </button>
                         </div>
                       ) : null}
                     </li>
@@ -1551,7 +2084,7 @@ export function PosWorkspace() {
         {canSeeInventory ? <article id="inventory" className="card panel">
           <div className="panel-head">
             <h2>Inventory</h2>
-            <p>Surface low stock risks early and keep recipe mapping close to stock operations.</p>
+            <p>Set stock, reorder thresholds, and ingredient recipes so ready orders deduct inventory automatically.</p>
           </div>
           <div className="compact-list">
             {inventory.length === 0 ? (
@@ -1561,43 +2094,74 @@ export function PosWorkspace() {
               </div>
             ) : inventory.map((item) => (
               <div key={item.id} className="order-card">
-                <p className={item.lowStock ? "alert" : ""}>
-                  {item.name} · {item.quantity} {item.unit}{item.lowStock ? " · Low stock" : ""}
+                <strong className={item.lowStock ? "alert" : ""}>{item.name}</strong>
+                <p>
+                  {item.type === "MENU" ? "Menu item" : "Consumable"} · On hand: {item.quantity} {item.unit}
+                  {item.menuItem ? ` · Linked to ${item.menuItem.name}` : ""}
                 </p>
-                {canManageRestaurant ? (
-                  <div className="inline-actions">
-                    <button onClick={() => {
-                      setEditingStockItemId(String(item.id));
-                      setEditStockName(item.name);
-                      setEditStockUnit(item.unit);
-                      setEditStockQuantity(String(item.quantity));
-                      setEditStockReorderLevel(String(item.reorderLevel));
-                    }}>Edit</button>
-                  </div>
-                ) : null}
-                {editingStockItemId === String(item.id) ? (
-                  <div className="form-block stack">
-                    <label>Name<input value={editStockName} onChange={(e) => setEditStockName(e.target.value)} /></label>
-                    <label>Unit<input value={editStockUnit} onChange={(e) => setEditStockUnit(e.target.value)} /></label>
-                    <label>Quantity<input inputMode="decimal" value={editStockQuantity} onChange={(e) => setEditStockQuantity(e.target.value)} /></label>
-                    <label>Reorder level<input inputMode="decimal" value={editStockReorderLevel} onChange={(e) => setEditStockReorderLevel(e.target.value)} /></label>
-                    <div className="inline-actions">
-                      <button onClick={() => void updateStockItem(item.id)}>Save</button>
-                      <button onClick={() => setEditingStockItemId("")}>Cancel</button>
-                    </div>
-                  </div>
-                ) : null}
+                <div className="inline-fields">
+                  <label>
+                    Quantity
+                    <input
+                      inputMode="decimal"
+                      value={stockDrafts[item.id]?.quantity ?? ""}
+                      onChange={(event) => updateStockDraft(item.id, { quantity: event.target.value })}
+                    />
+                  </label>
+                  <label>
+                    Reorder level
+                    <input
+                      inputMode="decimal"
+                      value={stockDrafts[item.id]?.reorderLevel ?? ""}
+                      onChange={(event) => updateStockDraft(item.id, { reorderLevel: event.target.value })}
+                    />
+                  </label>
+                </div>
+                <div className="inline-actions">
+                  {canManageRestaurant ? (
+                    <button type="button" disabled={busyActions[`stock-item-${item.id}`]} onClick={() => void saveStockItem(item.id)}>
+                      {busyActions[`stock-item-${item.id}`] ? "Saving..." : "Save stock settings"}
+                    </button>
+                  ) : null}
+                  {item.lowStock ? <span className="helper-text">Low stock</span> : null}
+                </div>
               </div>
             ))}
           </div>
-          <form className="stack form-block" onSubmit={createStockItem}>
+          {canManageRestaurant ? <form className="stack form-block" onSubmit={createStockItem}>
+            <label>
+              Inventory type
+              <select value={stockType} onChange={(event) => setStockType(event.target.value as "MENU" | "CONSUMABLE")}>
+                <option value="CONSUMABLE">Consumable ingredient</option>
+                <option value="MENU">Menu item stock</option>
+              </select>
+            </label>
+            {stockType === "MENU" ? (
+              <label>
+                Linked menu item
+                <select value={stockMenuItemId} onChange={(event) => setStockMenuItemId(event.target.value)}>
+                  <option value="">Select menu item</option>
+                  {menuOptions.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
             <label>
               Stock item
               <input value={stockName} onChange={(event) => setStockName(event.target.value)} />
             </label>
             <label>
               Unit
-              <input value={stockUnit} onChange={(event) => setStockUnit(event.target.value)} />
+              <select value={stockUnit} onChange={(event) => setStockUnit(event.target.value as StockUnit)}>
+                {stockUnits.map((unit) => (
+                  <option key={unit.value} value={unit.value}>
+                    {unit.label}
+                  </option>
+                ))}
+              </select>
             </label>
             <label>
               Quantity
@@ -1607,9 +2171,15 @@ export function PosWorkspace() {
               Reorder level
               <input inputMode="decimal" value={stockReorderLevel} onChange={(event) => setStockReorderLevel(event.target.value)} />
             </label>
-            <button type="submit">Add stock item</button>
-          </form>
-          <form className="stack form-block" onSubmit={createRecipe}>
+            <button type="submit" disabled={busyActions.createStockItem}>
+              {busyActions.createStockItem ? "Saving..." : "Add stock item"}
+            </button>
+          </form> : null}
+          {canManageRestaurant ? <form className="stack form-block" onSubmit={createRecipe}>
+            <div className="panel-head">
+              <h2>Recipe setup</h2>
+              <p>Define what is needed to prepare one menu item and how much of each ingredient is consumed.</p>
+            </div>
             <label>
               Recipe menu item
               <select value={recipeMenuItemId} onChange={(event) => setRecipeMenuItemId(event.target.value)}>
@@ -1621,23 +2191,87 @@ export function PosWorkspace() {
                 ))}
               </select>
             </label>
-            <label>
-              Stock ingredient
-              <select value={recipeStockItemId} onChange={(event) => setRecipeStockItemId(event.target.value)}>
-                <option value="">Select stock</option>
-                {inventory.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Quantity per item
-              <input inputMode="decimal" value={recipeQuantity} onChange={(event) => setRecipeQuantity(event.target.value)} />
-            </label>
-            <button type="submit">Save recipe</button>
-          </form>
+            {selectedRecipe ? (
+              <div className="empty-state">
+                <strong>Current recipe</strong>
+                <p>
+                  {selectedRecipe.items.map((item) => `${item.stockItem.name} ${item.quantity} ${item.unit}`).join(" · ")}
+                </p>
+              </div>
+            ) : null}
+            <div className="compact-list">
+              {recipeDraftItems.map((item, index) => (
+                <div key={`${index}-${item.stockItemId || "new"}`} className="order-card">
+                  <div className="inline-fields">
+                    <label>
+                      Stock ingredient
+                      <select
+                        value={item.stockItemId}
+                        onChange={(event) => updateRecipeDraftItem(index, { stockItemId: event.target.value })}
+                      >
+                        <option value="">Select stock</option>
+                        {inventory.filter((stockItem) => stockItem.type !== "MENU").map((stockItem) => (
+                          <option key={stockItem.id} value={stockItem.id}>
+                            {stockItem.name} · {stockItem.unit}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Quantity per menu item
+                      <input
+                        inputMode="decimal"
+                        value={item.quantity}
+                        onChange={(event) => updateRecipeDraftItem(index, { quantity: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      Recipe unit
+                      <select value={item.unit} onChange={(event) => updateRecipeDraftItem(index, { unit: event.target.value as StockUnit })}>
+                        {stockUnits.map((unit) => (
+                          <option key={unit.value} value={unit.value}>
+                            {unit.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="inline-actions">
+                    <button type="button" onClick={() => removeRecipeDraftItem(index)}>
+                      Remove ingredient
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="inline-actions">
+              <button type="button" onClick={addRecipeDraftItem}>
+                Add ingredient
+              </button>
+            </div>
+            <button type="submit" disabled={busyActions.createRecipe}>
+              {busyActions.createRecipe ? "Saving..." : "Save recipe"}
+            </button>
+          </form> : null}
+          <div className="compact-list form-block">
+            <div className="panel-head">
+              <h2>Saved recipes</h2>
+              <p>Review the ingredient list that will be deducted when an order is ready.</p>
+            </div>
+            {recipes.length === 0 ? (
+              <div className="empty-state">
+                <strong>No recipes saved</strong>
+                <p>Choose a menu item above and add its ingredients to activate automatic stock deductions.</p>
+              </div>
+            ) : recipes.map((recipe) => (
+              <div key={recipe.id} className="order-card">
+                <strong>{recipe.menuItem.name}</strong>
+                <p>
+                  {recipe.items.map((item) => `${item.stockItem.name} ${item.quantity} ${item.unit}`).join(" · ")}
+                </p>
+              </div>
+            ))}
+          </div>
         </article> : null}
 
         {canSeeReports ? <article id="reports" className="card panel">
@@ -1686,7 +2320,9 @@ export function PosWorkspace() {
               Capacity
               <input value={tableCapacity} onChange={(event) => setTableCapacity(event.target.value)} />
             </label>
-            <button type="submit">Add table</button>
+            <button type="submit" disabled={busyActions.createTable}>
+              {busyActions.createTable ? "Creating..." : "Add table"}
+            </button>
           </form>
           <form className="stack form-block" onSubmit={sendSms}>
             <label>
@@ -1697,7 +2333,9 @@ export function PosWorkspace() {
               Message
               <input value={smsText} onChange={(event) => setSmsText(event.target.value)} />
             </label>
-            <button type="submit">Send SMS</button>
+            <button type="submit" disabled={busyActions.sendSms}>
+              {busyActions.sendSms ? "Sending..." : "Send SMS"}
+            </button>
           </form>
           <div className="compact-list">
             {smsMessages.length === 0 ? (
@@ -1749,12 +2387,25 @@ export function PosWorkspace() {
                   {member.firstName} {member.lastName}
                 </strong>
                 <p>
-                  {member.email} · {member.role} · {member.isActive ? "Active" : "Inactive"}
+                  {member.email} · {member.isActive ? "Active" : "Inactive"}
                 </p>
-                <div className="inline-actions">
+                <label style={{ marginTop: 8, display: "block" }}>
+                  Role
+                  <select
+                    value={member.role}
+                    disabled={!!busyActions[`staff-role-${member.id}`]}
+                    onChange={(event) => void updateStaffRole(member.id, event.target.value)}
+                  >
+                    <option value="MANAGER">Manager</option>
+                    <option value="CASHIER">Cashier</option>
+                    <option value="KITCHEN">Kitchen</option>
+                    <option value="DELIVERY">Delivery</option>
+                  </select>
+                </label>
+                <div className="inline-actions" style={{ marginTop: 8 }}>
                   <button onClick={() => setEditingStaffId(String(member.id))}>Set password</button>
-                  <button onClick={() => void updateStaffMember(member.id, member.isActive)}>
-                    {member.isActive ? "Deactivate" : "Activate"}
+                  <button disabled={busyActions[`staff-status-${member.id}`]} onClick={() => void updateStaffMember(member.id, member.isActive)}>
+                    {busyActions[`staff-status-${member.id}`] ? "Saving..." : member.isActive ? "Deactivate" : "Activate"}
                   </button>
                 </div>
                 {editingStaffId === String(member.id) ? (
@@ -1763,9 +2414,38 @@ export function PosWorkspace() {
                       New password
                       <input type="password" autoComplete="new-password" value={staffPassword} onChange={(event) => setStaffPassword(event.target.value)} />
                     </label>
-                    <button onClick={() => void resetStaffPassword(member.id)}>Save password</button>
+                    <button disabled={busyActions[`staff-password-${member.id}`]} onClick={() => void resetStaffPassword(member.id)}>
+                      {busyActions[`staff-password-${member.id}`] ? "Saving..." : "Save password"}
+                    </button>
                   </div>
                 ) : null}
+              </div>
+            ))}
+          </div>
+          <div className="panel-head" style={{ marginTop: 18 }}>
+            <h2>Delivery profiles</h2>
+            <p>Manage independent riders separately from staff logins.</p>
+          </div>
+          <div className="compact-list">
+            {deliveryAgents.length === 0 ? (
+              <div className="empty-state">
+                <strong>No delivery profiles yet</strong>
+                <p>Add contractor riders here so cashiers can assign them on takeaway orders.</p>
+              </div>
+            ) : deliveryAgents.map((agent) => (
+              <div key={agent.id} className="order-card">
+                <strong>
+                  {agent.firstName} {agent.lastName}
+                </strong>
+                <p>
+                  {agent.phone} · {agent.isActive ? "Active" : "Inactive"}
+                </p>
+                {agent.notes ? <p>{agent.notes}</p> : null}
+                <div className="inline-actions">
+                  <button disabled={busyActions[`delivery-agent-${agent.id}`]} onClick={() => void updateDeliveryAgent(agent.id, agent.isActive)}>
+                    {busyActions[`delivery-agent-${agent.id}`] ? "Saving..." : agent.isActive ? "Deactivate" : "Activate"}
+                  </button>
+                </div>
               </div>
             ))}
           </div>
