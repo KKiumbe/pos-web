@@ -529,15 +529,117 @@ a:focus-visible {
   font-size: 0.92rem;
 }
 
+.management-subgrid,
+.touch-grid,
+.selection-grid,
+.field-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.management-subgrid,
+.touch-grid,
+.selection-grid,
+.field-grid,
+.workspace-grid,
+.metrics-grid,
+.hero-points,
+.stat-strip,
+.inline-fields,
+.auth-page,
+.quick-fill-grid,
+.auth-feature-list {
+  grid-template-columns: 1fr;
+}
+
+.inventory-panel,
+.list-card {
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 250, 242, 0.78);
+}
+
+.chip-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.chip-toggle .toggle-active,
+.chip-toggle .toggle-inactive {
+  border: 0;
+  border-radius: 0;
+  padding: 12px 14px;
+}
+
+.chip-toggle .toggle-active {
+  background: var(--primary);
+  color: white;
+}
+
+.chip-toggle .toggle-inactive {
+  background: transparent;
+  color: var(--muted);
+}
+
+.selection-card {
+  width: 100%;
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface-strong);
+  color: var(--text);
+}
+
+.selection-card span,
+.selection-card small {
+  color: var(--muted);
+}
+
+.selection-card strong {
+  font-size: 1rem;
+}
+
+.selection-card-active {
+  border-color: rgba(166, 75, 42, 0.4);
+  background: rgba(166, 75, 42, 0.08);
+  box-shadow: 0 0 0 3px rgba(166, 75, 42, 0.08);
+}
+
+.danger-button {
+  background: #8d2b1e;
+}
+
+.danger-button:hover {
+  background: #701e13;
+}
+
+.ghost-button {
+  background: transparent;
+  color: var(--primary-strong);
+  border: 1px solid var(--line);
+}
+
+.ghost-button:hover {
+  background: rgba(166, 75, 42, 0.08);
+  color: var(--primary-strong);
+}
+
+.checkbox-label {
+  justify-content: end;
+}
+
 .empty-state {
   padding: 18px;
   border: 1px dashed var(--line);
   border-radius: 16px;
   background: rgba(255, 250, 242, 0.66);
-}
-
-.workspace-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .orders-panel {
@@ -1046,17 +1148,8 @@ a:focus-visible {
 }
 
 @media (max-width: 900px) {
-  .auth-page {
-    grid-template-columns: 1fr;
-    min-height: auto;
-  }
-
   .auth-brand {
     padding: 40px 28px;
-  }
-
-  .auth-feature-list {
-    grid-template-columns: 1fr 1fr;
   }
 
   .auth-form-side {
@@ -1070,16 +1163,9 @@ a:focus-visible {
 }
 
 @media (max-width: 560px) {
-  .auth-feature-list {
-    grid-template-columns: 1fr;
-  }
-
-  .quick-fill-grid {
-    grid-template-columns: 1fr;
-  }
 }
 
-@media (max-width: 1100px) {
+@media (min-width: 721px) {
   .metrics-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -1088,9 +1174,54 @@ a:focus-visible {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .field-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .selection-grid,
+  .touch-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .management-subgrid {
+    grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  }
+}
+
+@media (min-width: 1101px) {
+  .metrics-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .workspace-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .selection-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .touch-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 901px) {
+  .auth-page {
+    grid-template-columns: 1.1fr 0.9fr;
+  }
+
+  .auth-feature-list {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (min-width: 1101px) {
   .hero-points,
-  .stat-strip {
-    grid-template-columns: 1fr;
+  .stat-strip,
+  .inline-fields,
+  .quick-fill-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .orders-panel {
@@ -1104,14 +1235,8 @@ a:focus-visible {
   }
 
   .hero,
-  .topbar,
-  .metrics-grid,
-  .workspace-grid {
+  .topbar {
     grid-template-columns: 1fr;
-  }
-
-  .orders-panel {
-    grid-column: span 1;
   }
 
   .topbar-actions,

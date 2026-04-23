@@ -38,6 +38,53 @@ type StaffDraft = {
   isActive: boolean;
 };
 
+type StockUnit = "KILOGRAM" | "GRAM" | "LITER" | "MILLILITER" | "CARTON" | "SLICE" | "PIECE" | "BOTTLE" | "PACKET";
+
+type InventoryItem = {
+  id: number;
+  type: "MENU" | "CONSUMABLE";
+  menuItemId?: number | null;
+  menuItem?: { id: number; name: string } | null;
+  name: string;
+  unit: StockUnit;
+  quantity: number;
+  reorderLevel: number;
+  lowStock: boolean;
+};
+
+type RecipeDefinition = {
+  id: number;
+  menuItem: {
+    id: number;
+    name: string;
+  };
+  items: Array<{
+    id: number;
+    quantity: number;
+    unit: StockUnit;
+    stockItem: {
+      id: number;
+      name: string;
+      unit: StockUnit;
+    };
+  }>;
+};
+
+type StockDraft = {
+  name: string;
+  unit: StockUnit;
+  quantity: string;
+  reorderLevel: string;
+  type: "MENU" | "CONSUMABLE";
+  menuItemId: string;
+};
+
+type RecipeDraftItem = {
+  stockItemId: string;
+  quantity: string;
+  unit: StockUnit;
+};
+
 type ReportPeriod = {
   label: string;
   startDate: string;
@@ -123,12 +170,32 @@ type TenantProfile = {
   name: string;
 };
 
+type MenuDraft = {
+  name: string;
+  description: string;
+  photoUrl: string;
+  price: string;
+  isAvailable: boolean;
+  categoryId: string;
+};
+
 const storageKey = "tableflow-session";
 const roleOptions = [
   { value: "MANAGER", label: "Manager" },
   { value: "CASHIER", label: "Cashier" },
   { value: "KITCHEN", label: "Kitchen" },
   { value: "DELIVERY", label: "Delivery" }
+];
+const stockUnits: Array<{ value: StockUnit; label: string }> = [
+  { value: "KILOGRAM", label: "Kilos" },
+  { value: "GRAM", label: "Grams" },
+  { value: "LITER", label: "Liters" },
+  { value: "MILLILITER", label: "Milliliters" },
+  { value: "CARTON", label: "Cartons" },
+  { value: "SLICE", label: "Slices" },
+  { value: "PIECE", label: "Pieces" },
+  { value: "BOTTLE", label: "Bottles" },
+  { value: "PACKET", label: "Packets" }
 ];
 
 function formatCurrency(amount: number, currency = "KES") {
@@ -137,6 +204,10 @@ function formatCurrency(amount: number, currency = "KES") {
 
 function formatPeriodLabel(startDate: string, endDate: string) {
   return startDate === endDate ? startDate : `${startDate} to ${endDate}`;
+}
+
+function normalizeSearch(value: string) {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 function getMessageTone(message: string): "success" | "warning" | "info" {
@@ -153,7 +224,8 @@ function getMessageTone(message: string): "success" | "warning" | "info" {
     normalized.includes("created") ||
     normalized.includes("loaded") ||
     normalized.includes("updated") ||
-    normalized.includes("saved")
+    normalized.includes("saved") ||
+    normalized.includes("removed")
   ) {
     return "success";
   }
@@ -171,6 +243,32 @@ function createEmptyStaffDraft(): StaffDraft {
   };
 }
 
+function createMenuDraft(item?: MenuItem): MenuDraft {
+  return {
+    name: item?.name ?? "",
+    description: item?.description ?? "",
+    photoUrl: item?.photoUrl ?? "",
+    price: item ? String(item.price) : "",
+    isAvailable: item?.isAvailable ?? true,
+    categoryId: item?.categoryId ? String(item.categoryId) : ""
+  };
+}
+
+function createStockDraft(item?: InventoryItem): StockDraft {
+  return {
+    name: item?.name ?? "",
+    unit: item?.unit ?? "KILOGRAM",
+    quantity: item ? String(item.quantity) : "",
+    reorderLevel: item ? String(item.reorderLevel) : "0",
+    type: item?.type ?? "CONSUMABLE",
+    menuItemId: item?.menuItemId ? String(item.menuItemId) : item?.menuItem?.id ? String(item.menuItem.id) : ""
+  };
+}
+
+function createRecipeDraftItem(): RecipeDraftItem {
+  return { stockItemId: "", quantity: "", unit: "GRAM" };
+}
+
 function getTodayDate() {
   const today = new Date();
   const year = today.getFullYear();
@@ -185,6 +283,8 @@ export function MenuManager() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [staffDrafts, setStaffDrafts] = useState<Record<number, StaffDraft>>({});
+  const [inventory, setInventory] = useState<InventoryItem[]>([]);
+  const [recipes, setRecipes] = useState<RecipeDefinition[]>([]);
   const [dailyReport, setDailyReport] = useState<DailyReport | null>(null);
   const [reportOverview, setReportOverview] = useState<ReportOverview | null>(null);
   const [tenantProfile, setTenantProfile] = useState<TenantProfile | null>(null);
@@ -198,6 +298,22 @@ export function MenuManager() {
   const [itemPrice, setItemPrice] = useState("");
   const [itemCategoryId, setItemCategoryId] = useState("");
   const [itemAvailable, setItemAvailable] = useState(true);
+  const [menuSearch, setMenuSearch] = useState("");
+  const [editingMenuItemId, setEditingMenuItemId] = useState<number | null>(null);
+  const [editingMenuDraft, setEditingMenuDraft] = useState<MenuDraft>(createMenuDraft());
+  const [stockName, setStockName] = useState("");
+  const [stockUnit, setStockUnit] = useState<StockUnit>("KILOGRAM");
+  const [stockQuantity, setStockQuantity] = useState("");
+  const [stockReorderLevel, setStockReorderLevel] = useState("0");
+  const [stockType, setStockType] = useState<"MENU" | "CONSUMABLE">("CONSUMABLE");
+  const [stockMenuItemId, setStockMenuItemId] = useState("");
+  const [inventorySearch, setInventorySearch] = useState("");
+  const [selectedStockItemId, setSelectedStockItemId] = useState<number | null>(null);
+  const [stockDrafts, setStockDrafts] = useState<Record<number, StockDraft>>({});
+  const [recipeMenuItemId, setRecipeMenuItemId] = useState("");
+  const [recipeMenuSearch, setRecipeMenuSearch] = useState("");
+  const [recipeIngredientSearch, setRecipeIngredientSearch] = useState("");
+  const [recipeDraftItems, setRecipeDraftItems] = useState<RecipeDraftItem[]>([createRecipeDraftItem()]);
   const [staffFirstName, setStaffFirstName] = useState("");
   const [staffLastName, setStaffLastName] = useState("");
   const [staffEmail, setStaffEmail] = useState("");
@@ -240,9 +356,11 @@ export function MenuManager() {
 
   async function loadManagement(activeToken: string, activeReportDate = reportDate) {
     try {
-      const [menuData, staffData, reportData, overviewData, tenantData] = await Promise.all([
+      const [menuData, staffData, inventoryData, recipeData, reportData, overviewData, tenantData] = await Promise.all([
         apiRequest<Category[]>("/menu/categories", {}, activeToken),
         apiRequest<StaffMember[]>("/staff", {}, activeToken),
+        apiRequest<InventoryItem[]>("/inventory/items", {}, activeToken),
+        apiRequest<RecipeDefinition[]>("/inventory/recipes", {}, activeToken),
         apiRequest<DailyReport>(`/reports/daily?date=${activeReportDate}`, {}, activeToken),
         apiRequest<ReportOverview>(`/reports/overview?date=${activeReportDate}`, {}, activeToken),
         apiRequest<TenantProfile>("/tenant/profile", {}, activeToken)
@@ -250,6 +368,8 @@ export function MenuManager() {
       setCategories(menuData);
       setStaff(staffData);
       seedStaffDrafts(staffData);
+      setInventory(inventoryData);
+      setRecipes(recipeData);
       setDailyReport(reportData);
       setReportOverview(overviewData);
       setTenantProfile(tenantData);
@@ -375,33 +495,52 @@ export function MenuManager() {
     }
   }
 
-  async function updateMenuItemPrice(itemId: number, currentPrice: number) {
-    if (!token) return;
+  function beginMenuEdit(item: MenuItem) {
+    setEditingMenuItemId(item.id);
+    setEditingMenuDraft(createMenuDraft(item));
+    document.getElementById("menu-editor")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
-    const nextPriceValue = window.prompt("Enter the new price for this menu item.", String(currentPrice));
-    if (nextPriceValue == null) {
+  async function saveMenuItem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!token || editingMenuItemId == null) return;
+
+    const parsedPrice = Number(editingMenuDraft.price);
+    const categoryId = Number(editingMenuDraft.categoryId);
+
+    if (!editingMenuDraft.name.trim()) {
+      setMessage("Item name is required.");
       return;
     }
-
-    const nextPrice = Number(nextPriceValue);
-    if (Number.isNaN(nextPrice) || nextPrice <= 0) {
+    if (!editingMenuDraft.categoryId || Number.isNaN(categoryId)) {
+      setMessage("Select a valid category.");
+      return;
+    }
+    if (Number.isNaN(parsedPrice) || parsedPrice <= 0) {
       setMessage("Enter a valid price greater than zero.");
       return;
     }
 
     try {
       await apiRequest(
-        `/menu/items/${itemId}`,
+        `/menu/items/${editingMenuItemId}`,
         {
           method: "PATCH",
-          body: JSON.stringify({ price: nextPrice })
+          body: JSON.stringify({
+            name: editingMenuDraft.name.trim(),
+            categoryId,
+            description: editingMenuDraft.description || null,
+            photoUrl: editingMenuDraft.photoUrl || null,
+            price: parsedPrice,
+            isAvailable: editingMenuDraft.isAvailable
+          })
         },
         token
       );
-      setMessage("Menu item price updated.");
+      setMessage("Menu item updated.");
       await loadManagement(token, reportDate);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to update menu item price.");
+      setMessage(error instanceof Error ? error.message : "Unable to update menu item.");
     }
   }
 
@@ -421,10 +560,190 @@ export function MenuManager() {
         },
         token
       );
+      if (editingMenuItemId === itemId) {
+        setEditingMenuItemId(null);
+        setEditingMenuDraft(createMenuDraft());
+      }
       setMessage(response.message ?? "Menu item removed.");
       await loadManagement(token, reportDate);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to remove menu item.");
+    }
+  }
+
+  async function createStockItem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!token) return;
+
+    const parsedQuantity = Number(stockQuantity);
+    const parsedReorderLevel = Number(stockReorderLevel || 0);
+    const parsedMenuItemId = stockMenuItemId ? Number(stockMenuItemId) : null;
+
+    if (!stockName.trim() || Number.isNaN(parsedQuantity)) {
+      setMessage("Stock name and quantity are required.");
+      return;
+    }
+
+    if (stockType === "MENU" && (!stockMenuItemId || parsedMenuItemId == null || Number.isNaN(parsedMenuItemId))) {
+      setMessage("Pick a linked menu item for menu stock.");
+      return;
+    }
+
+    try {
+      await apiRequest(
+        "/inventory/items",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            name: stockName.trim(),
+            unit: stockUnit,
+            quantity: parsedQuantity,
+            reorderLevel: Number.isNaN(parsedReorderLevel) ? 0 : parsedReorderLevel,
+            type: stockType,
+            menuItemId: stockType === "MENU" ? parsedMenuItemId : null
+          })
+        },
+        token
+      );
+      setStockName("");
+      setStockUnit("KILOGRAM");
+      setStockQuantity("");
+      setStockReorderLevel("0");
+      setStockType("CONSUMABLE");
+      setStockMenuItemId("");
+      setMessage("Stock item created.");
+      await loadManagement(token, reportDate);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to create stock item.");
+    }
+  }
+
+  function beginStockEdit(item: InventoryItem) {
+    setSelectedStockItemId(item.id);
+    setStockDrafts((current) => ({
+      ...current,
+      [item.id]: current[item.id] ?? createStockDraft(item)
+    }));
+    document.getElementById("stock-editor")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function updateStockDraft(itemId: number, patch: Partial<StockDraft>) {
+    setStockDrafts((current) => ({
+      ...current,
+      [itemId]: {
+        ...(current[itemId] ?? createStockDraft(inventory.find((entry) => entry.id === itemId))),
+        ...patch
+      }
+    }));
+  }
+
+  async function saveStockItem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!token || selectedStockItemId == null) return;
+
+    const draft = stockDrafts[selectedStockItemId];
+    if (!draft) return;
+
+    const quantity = Number(draft.quantity);
+    const reorderLevel = Number(draft.reorderLevel);
+    const menuItemId = draft.menuItemId ? Number(draft.menuItemId) : null;
+
+    if (!draft.name.trim() || Number.isNaN(quantity) || Number.isNaN(reorderLevel)) {
+      setMessage("Name, quantity, and reorder level are required.");
+      return;
+    }
+
+    if (draft.type === "MENU" && (menuItemId == null || Number.isNaN(menuItemId))) {
+      setMessage("Menu stock must be linked to a menu item.");
+      return;
+    }
+
+    try {
+      await apiRequest(
+        `/inventory/items/${selectedStockItemId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            name: draft.name.trim(),
+            unit: draft.unit,
+            quantity,
+            reorderLevel,
+            type: draft.type,
+            menuItemId: draft.type === "MENU" ? menuItemId : null
+          })
+        },
+        token
+      );
+      setMessage("Stock item updated.");
+      await loadManagement(token, reportDate);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to update stock item.");
+    }
+  }
+
+  function updateRecipeDraftItem(index: number, patch: Partial<RecipeDraftItem>) {
+    setRecipeDraftItems((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
+  }
+
+  function addRecipeDraftItem() {
+    setRecipeDraftItems((current) => [...current, createRecipeDraftItem()]);
+  }
+
+  function removeRecipeDraftItem(index: number) {
+    setRecipeDraftItems((current) => (current.length === 1 ? [createRecipeDraftItem()] : current.filter((_, itemIndex) => itemIndex !== index)));
+  }
+
+  function startRecipeEdit(recipe: RecipeDefinition) {
+    setRecipeMenuItemId(String(recipe.menuItem.id));
+    setRecipeMenuSearch(recipe.menuItem.name);
+    setRecipeDraftItems(
+      recipe.items.length > 0
+        ? recipe.items.map((item) => ({
+            stockItemId: String(item.stockItem.id),
+            quantity: String(item.quantity),
+            unit: item.unit
+          }))
+        : [createRecipeDraftItem()]
+    );
+    document.getElementById("recipe-builder")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  async function saveRecipe(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!token) return;
+
+    const menuItemId = Number(recipeMenuItemId);
+    const items = recipeDraftItems
+      .filter((item) => item.stockItemId && item.quantity)
+      .map((item) => ({
+        stockItemId: Number(item.stockItemId),
+        quantity: Number(item.quantity),
+        unit: item.unit
+      }));
+
+    if (Number.isNaN(menuItemId) || items.length === 0) {
+      setMessage("Choose a menu item and at least one ingredient.");
+      return;
+    }
+
+    if (items.some((item) => Number.isNaN(item.stockItemId) || Number.isNaN(item.quantity) || item.quantity <= 0)) {
+      setMessage("Each recipe line needs a valid ingredient and quantity.");
+      return;
+    }
+
+    try {
+      await apiRequest(
+        "/inventory/recipes",
+        {
+          method: "POST",
+          body: JSON.stringify({ menuItemId, items })
+        },
+        token
+      );
+      setMessage("Recipe saved.");
+      await loadManagement(token, reportDate);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to save recipe.");
     }
   }
 
@@ -554,7 +873,25 @@ export function MenuManager() {
     );
   }
 
-  const totalItems = categories.reduce((acc, category) => acc + category.items.length, 0);
+  const allMenuItems = categories.flatMap((category) =>
+    category.items.map((item) => ({ ...item, categoryName: category.name }))
+  );
+  const filteredMenuItems = allMenuItems.filter((item) =>
+    normalizeSearch(`${item.name} ${item.categoryName} ${item.description ?? ""}`).includes(normalizeSearch(menuSearch))
+  );
+  const filteredInventory = inventory.filter((item) =>
+    normalizeSearch(`${item.name} ${item.type} ${item.unit} ${item.menuItem?.name ?? ""}`).includes(normalizeSearch(inventorySearch))
+  );
+  const consumableItems = inventory.filter((item) => item.type === "CONSUMABLE");
+  const filteredRecipeMenuItems = allMenuItems.filter((item) =>
+    normalizeSearch(`${item.name} ${item.categoryName}`).includes(normalizeSearch(recipeMenuSearch))
+  );
+  const filteredRecipeIngredients = consumableItems.filter((item) =>
+    normalizeSearch(`${item.name} ${item.unit}`).includes(normalizeSearch(recipeIngredientSearch))
+  );
+  const selectedStockItem = selectedStockItemId == null ? null : inventory.find((item) => item.id === selectedStockItemId) ?? null;
+  const selectedStockDraft = selectedStockItemId == null ? null : stockDrafts[selectedStockItemId] ?? createStockDraft(selectedStockItem ?? undefined);
+  const totalItems = allMenuItems.length;
   const activeStaff = staff.filter((member) => member.isActive).length;
   const currency = session?.tenant.currency ?? "KES";
 
@@ -599,7 +936,7 @@ export function MenuManager() {
           <p className="eyebrow">Management · {session.tenant.name}</p>
           <h1>Restaurant management</h1>
           <p className="lede">
-            Menu, employees, and daily reporting in one manager workspace.
+            Phone-first menu, inventory, recipes, employees, and reporting in one manager workspace.
           </p>
         </div>
         <div className="topbar-actions">
@@ -624,8 +961,8 @@ export function MenuManager() {
           <strong>{categories.length} categories · {totalItems} items</strong>
         </div>
         <div className="stat-chip">
-          <span>Employees</span>
-          <strong>{activeStaff} active · {staff.length} total</strong>
+          <span>Inventory</span>
+          <strong>{inventory.length} stock items · {recipes.length} recipes</strong>
         </div>
         <div className="stat-chip">
           <span>Daily sales</span>
@@ -639,16 +976,17 @@ export function MenuManager() {
         <a href="#employees" className="section-chip">Employees</a>
         <a href="#reports" className="section-chip">Reports</a>
         <a href="#menu" className="section-chip">Menu</a>
+        <a href="#inventory" className="section-chip">Inventory & recipes</a>
       </nav>
 
       <section id="overview" className="metrics-grid">
         {[
-          ["Available menu items", categories.flatMap((category) => category.items).filter((item) => item.isAvailable).length],
-          ["Active managers", staff.filter((member) => member.role === "MANAGER" && member.isActive).length],
+          ["Available menu items", allMenuItems.filter((item) => item.isAvailable).length],
+          ["Recipes mapped", recipes.length],
+          ["Consumables tracked", inventory.filter((item) => item.type === "CONSUMABLE").length],
           ["Orders on selected day", dailyReport?.ordersCount ?? "Loading..."],
           ["Payments on selected day", dailyReport?.paymentCount ?? "Loading..."],
-          ["Items sold on selected day", dailyReport?.itemsSold ?? "Loading..."],
-          ["Current low stock alerts", dailyReport?.lowStockItems.length ?? "Loading..."]
+          ["Current low stock alerts", reportOverview?.stockSnapshot.lowStockCount ?? "Loading..."]
         ].map(([label, value]) => (
           <article key={label} className="card metric-card">
             <span>{label}</span>
@@ -661,7 +999,7 @@ export function MenuManager() {
         <article id="restaurant-admin" className="card panel">
           <div className="panel-head">
             <h2>Restaurant admin</h2>
-            <p>Keep restaurant identity and staff access current from the same screen.</p>
+            <p>Keep restaurant identity current from the same screen.</p>
           </div>
           <form className="stack" onSubmit={updateRestaurantProfile}>
             <label>
@@ -678,13 +1016,108 @@ export function MenuManager() {
           </form>
         </article>
 
-        <article id="employees" className="card panel" style={{ gridColumn: "span 3" }}>
+        <article id="reports" className="card panel">
+          <div className="panel-head">
+            <h2>Reports</h2>
+            <p>Review sales, top items, and stock pressure from one mobile-friendly panel.</p>
+          </div>
+          <form
+            className="stack"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void refreshReport(reportDate);
+            }}
+          >
+            <label>
+              Report date
+              <input
+                type="date"
+                value={reportDate}
+                onChange={(event) => setReportDate(event.target.value)}
+              />
+            </label>
+            <div className="inline-actions">
+              <button type="submit" disabled={isPending}>Load report</button>
+              <button type="button" onClick={() => void exportDailyReportPdf()} disabled={!reportDate || isPending}>
+                Export daily PDF
+              </button>
+              <button type="button" onClick={() => void exportOverviewPdf()} disabled={!reportDate || isPending}>
+                Export overview PDF
+              </button>
+            </div>
+          </form>
+
+          {reportOverview ? (
+            <>
+              <div className="compact-list" style={{ marginTop: 18 }}>
+                {[reportOverview.daily, reportOverview.weekly, reportOverview.monthly].map((period) => (
+                  <div key={period.label} className="order-card">
+                    <strong>{period.label}</strong>
+                    <p>{formatPeriodLabel(period.startDate, period.endDate)}</p>
+                    <p>Sales · {formatCurrency(period.salesTotal, currency)}</p>
+                    <p>Orders · {period.ordersCount}</p>
+                    <p>Payments · {period.paymentCount}</p>
+                    <p>Items sold · {period.itemsSold}</p>
+                    <p>Average order · {formatCurrency(period.averageOrderValue, currency)}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="compact-list" style={{ marginTop: 18 }}>
+                <div className="stat-chip">
+                  <span>Tracked stock items</span>
+                  <strong>{reportOverview.stockSnapshot.totalTrackedItems}</strong>
+                </div>
+                <div className="stat-chip">
+                  <span>Low stock now</span>
+                  <strong>{reportOverview.stockSnapshot.lowStockCount}</strong>
+                </div>
+                <div className="stat-chip">
+                  <span>Daily top item revenue</span>
+                  <strong>
+                    {dailyReport?.mostBoughtItem
+                      ? formatCurrency(dailyReport.mostBoughtItem.revenue, currency)
+                      : formatCurrency(0, currency)}
+                  </strong>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="empty-state" style={{ marginTop: 18 }}>
+              <p>Daily report data will appear here.</p>
+            </div>
+          )}
+        </article>
+
+        <article className="card panel">
+          <div className="panel-head">
+            <h2>Stock alerts</h2>
+            <p>Current low stock signals from the report snapshot.</p>
+          </div>
+          {!reportOverview || reportOverview.stockSnapshot.lowStockItems.length === 0 ? (
+            <div className="empty-state">
+              <strong>No low stock alerts</strong>
+              <p>Inventory levels are healthy for the selected date.</p>
+            </div>
+          ) : (
+            <div className="compact-list">
+              {reportOverview.stockSnapshot.lowStockItems.map((item) => (
+                <div key={item.id} className="order-card">
+                  <strong>{item.name}</strong>
+                  <p>{item.quantity} {item.unit} left · reorder at {item.reorderLevel}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </article>
+
+        <article id="employees" className="card panel" style={{ gridColumn: "1 / -1" }}>
           <div className="panel-head">
             <h2>Employee management</h2>
             <p>Create employee profiles, adjust roles, and manage access without leaving this workspace.</p>
           </div>
 
-          <div style={{ display: "grid", gap: 18, gridTemplateColumns: "minmax(280px, 340px) 1fr" }}>
+          <div className="management-subgrid">
             <form className="stack" onSubmit={createStaffMember}>
               <label>
                 First name
@@ -752,7 +1185,7 @@ export function MenuManager() {
                       </span>
                     </div>
 
-                    <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(2, minmax(0, 1fr))", marginTop: 16 }}>
+                    <div className="field-grid" style={{ marginTop: 16 }}>
                       <label>
                         First name
                         <input
@@ -795,7 +1228,7 @@ export function MenuManager() {
                           onChange={(event) => updateStaffDraft(member.id, { password: event.target.value })}
                         />
                       </label>
-                      <label style={{ justifyContent: "end" }}>
+                      <label className="checkbox-label">
                         <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
                           <input
                             type="checkbox"
@@ -820,159 +1253,10 @@ export function MenuManager() {
           </div>
         </article>
 
-        <article id="reports" className="card panel">
-          <div className="panel-head">
-            <h2>Reports</h2>
-            <p>Review daily, weekly, and monthly performance, top-selling items, and stock pressure.</p>
-          </div>
-          <form
-            className="stack"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void refreshReport(reportDate);
-            }}
-          >
-            <label>
-              Report date
-              <input
-                type="date"
-                value={reportDate}
-                onChange={(event) => setReportDate(event.target.value)}
-              />
-            </label>
-            <div className="inline-actions">
-              <button type="submit" disabled={isPending}>Load report</button>
-              <button type="button" onClick={() => void exportDailyReportPdf()} disabled={!reportDate || isPending}>
-                Export daily PDF
-              </button>
-              <button type="button" onClick={() => void exportOverviewPdf()} disabled={!reportDate || isPending}>
-                Export overview PDF
-              </button>
-            </div>
-          </form>
-
-          {reportOverview ? (
-            <>
-              <div className="compact-list" style={{ marginTop: 18 }}>
-                {[reportOverview.daily, reportOverview.weekly, reportOverview.monthly].map((period) => (
-                  <div key={period.label} className="order-card">
-                    <strong>{period.label}</strong>
-                    <p>{formatPeriodLabel(period.startDate, period.endDate)}</p>
-                    <p>Sales · {formatCurrency(period.salesTotal, currency)}</p>
-                    <p>Orders · {period.ordersCount}</p>
-                    <p>Payments · {period.paymentCount}</p>
-                    <p>Items sold · {period.itemsSold}</p>
-                    <p>Average order · {formatCurrency(period.averageOrderValue, currency)}</p>
-                    <p>
-                      Most bought · {period.mostBoughtItem
-                        ? `${period.mostBoughtItem.name} (${period.mostBoughtItem.quantity})`
-                        : "No sales"}
-                    </p>
-                  </div>
-                ))}
-              </div>
-
-              <div className="compact-list" style={{ marginTop: 18 }}>
-                <div className="stat-chip">
-                  <span>Tracked stock items</span>
-                  <strong>{reportOverview.stockSnapshot.totalTrackedItems}</strong>
-                </div>
-                <div className="stat-chip">
-                  <span>Low stock now</span>
-                  <strong>{reportOverview.stockSnapshot.lowStockCount}</strong>
-                </div>
-                <div className="stat-chip">
-                  <span>Daily top item revenue</span>
-                  <strong>
-                    {dailyReport?.mostBoughtItem
-                      ? formatCurrency(dailyReport.mostBoughtItem.revenue, currency)
-                      : formatCurrency(0, currency)}
-                  </strong>
-                </div>
-              </div>
-
-              <div className="compact-list" style={{ marginTop: 18 }}>
-                <div className="order-card">
-                  <strong>Daily sales trend</strong>
-                  <p>Last 7 trading days</p>
-                  {reportOverview.dailyTrend.map((entry) => (
-                    <p key={entry.label}>
-                      {entry.startDate} · {formatCurrency(entry.salesTotal, currency)} · {entry.ordersCount} orders · {entry.itemsSold} items
-                    </p>
-                  ))}
-                </div>
-                <div className="order-card">
-                  <strong>Weekly sales trend</strong>
-                  <p>Last 8 trading weeks</p>
-                  {reportOverview.weeklyTrend.map((entry) => (
-                    <p key={entry.label}>
-                      {formatPeriodLabel(entry.startDate, entry.endDate)} · {formatCurrency(entry.salesTotal, currency)} · {entry.ordersCount} orders
-                    </p>
-                  ))}
-                </div>
-                <div className="order-card">
-                  <strong>Monthly sales trend</strong>
-                  <p>Last 6 trading months</p>
-                  {reportOverview.monthlyTrend.map((entry) => (
-                    <p key={entry.label}>
-                      {entry.label} · {formatCurrency(entry.salesTotal, currency)} · {entry.ordersCount} orders
-                    </p>
-                  ))}
-                </div>
-              </div>
-            </>
-          ) : dailyReport ? (
-            <div className="compact-list" style={{ marginTop: 18 }}>
-              <div className="stat-chip">
-                <span>Sales total</span>
-                <strong>{formatCurrency(dailyReport.salesTotal, currency)}</strong>
-              </div>
-              <div className="stat-chip">
-                <span>Orders</span>
-                <strong>{dailyReport.ordersCount}</strong>
-              </div>
-              <div className="stat-chip">
-                <span>Payments</span>
-                <strong>{dailyReport.paymentCount}</strong>
-              </div>
-              <div className="stat-chip">
-                <span>Items sold</span>
-                <strong>{dailyReport.itemsSold}</strong>
-              </div>
-            </div>
-          ) : (
-            <div className="empty-state" style={{ marginTop: 18 }}>
-              <p>Daily report data will appear here.</p>
-            </div>
-          )}
-        </article>
-
-        <article className="card panel">
-          <div className="panel-head">
-            <h2>Stock alerts</h2>
-            <p>Current low stock signals from the report snapshot.</p>
-          </div>
-          {!reportOverview || reportOverview.stockSnapshot.lowStockItems.length === 0 ? (
-            <div className="empty-state">
-              <strong>No low stock alerts</strong>
-              <p>Inventory levels are healthy for the selected date.</p>
-            </div>
-          ) : (
-            <div className="compact-list">
-              {reportOverview.stockSnapshot.lowStockItems.map((item) => (
-                <div key={item.id} className="order-card">
-                  <strong>{item.name}</strong>
-                  <p>{item.quantity} {item.unit} left · reorder at {item.reorderLevel}</p>
-                </div>
-              ))}
-            </div>
-          )}
-        </article>
-
         <article id="menu" className="card panel">
           <div className="panel-head">
             <h2>New category</h2>
-            <p>Keep menu organisation close to staff and reporting workflows.</p>
+            <p>Create categories without leaving the manager screen.</p>
           </div>
           <form className="stack" onSubmit={createCategory}>
             <label>
@@ -989,7 +1273,7 @@ export function MenuManager() {
           </form>
         </article>
 
-        <article className="card panel" style={{ gridColumn: "span 2" }}>
+        <article className="card panel">
           <div className="panel-head">
             <h2>New menu item</h2>
             <p>Add a priced item and attach it to the right category.</p>
@@ -1001,7 +1285,7 @@ export function MenuManager() {
             </div>
           ) : (
             <form className="stack" onSubmit={createMenuItem}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+              <div className="field-grid">
                 <label>
                   Item name *
                   <input
@@ -1033,7 +1317,7 @@ export function MenuManager() {
                   <input
                     value={itemDescription}
                     onChange={(event) => setItemDescription(event.target.value)}
-                    placeholder="Short description (optional)"
+                    placeholder="Short description"
                   />
                 </label>
                 <label>
@@ -1044,7 +1328,7 @@ export function MenuManager() {
                     placeholder="https://..."
                   />
                 </label>
-                <label style={{ justifyContent: "end" }}>
+                <label className="checkbox-label">
                   <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <input
                       type="checkbox"
@@ -1059,83 +1343,449 @@ export function MenuManager() {
               <button type="submit" disabled={!canCreateMenuItem() || isPending}>
                 Create menu item
               </button>
-              <p className="helper-text">Required: name, category, and a price greater than zero.</p>
             </form>
           )}
         </article>
 
-        <article className="card panel" style={{ gridColumn: "span 3" }}>
+        <article id="menu-editor" className="card panel" style={{ gridColumn: "1 / -1" }}>
           <div className="panel-head">
-            <h2>Menu catalogue</h2>
-            <p>
-              {totalItems} {totalItems === 1 ? "item" : "items"} across {categories.length}{" "}
-              {categories.length === 1 ? "category" : "categories"}
-            </p>
+            <h2>Edit menu item</h2>
+            <p>Search, edit, and remove menu items without prompt dialogs or desktop-only layouts.</p>
           </div>
-          {categories.length === 0 ? (
-            <div className="empty-state">
-              <strong>No menu yet</strong>
-              <p>Create a category and add items to build the menu catalogue.</p>
+          <div className="stack">
+            <label>
+              Search menu
+              <input
+                value={menuSearch}
+                onChange={(event) => setMenuSearch(event.target.value)}
+                placeholder="Search by item, category, or description"
+              />
+            </label>
+            <div className="selection-grid">
+              {filteredMenuItems.length === 0 ? (
+                <div className="empty-state">
+                  <p>No menu items match your search.</p>
+                </div>
+              ) : filteredMenuItems.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`selection-card ${editingMenuItemId === item.id ? "selection-card-active" : ""}`}
+                  onClick={() => beginMenuEdit(item)}
+                >
+                  <span>{item.categoryName}</span>
+                  <strong>{item.name}</strong>
+                  <small>{formatCurrency(item.price, currency)} · {item.isAvailable ? "Available" : "Unavailable"}</small>
+                </button>
+              ))}
             </div>
-          ) : (
-            <div style={{ display: "grid", gap: 24 }}>
-              {categories.map((category) => (
-                <div key={category.id}>
-                  <p className="eyebrow" style={{ marginBottom: 10 }}>
-                    {category.name} · {category.items.length} {category.items.length === 1 ? "item" : "items"}
-                  </p>
-                  {category.items.length === 0 ? (
-                    <div className="empty-state">
-                      <p>No items in this category yet.</p>
-                    </div>
-                  ) : (
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
-                        gap: 12
-                      }}
+
+            {editingMenuItemId == null ? (
+              <div className="empty-state">
+                <strong>Select an item</strong>
+                <p>Tap any menu card above to edit it or remove it from sale.</p>
+              </div>
+            ) : (
+              <form className="stack" onSubmit={saveMenuItem}>
+                <div className="field-grid">
+                  <label>
+                    Item name
+                    <input
+                      value={editingMenuDraft.name}
+                      onChange={(event) => setEditingMenuDraft((current) => ({ ...current, name: event.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    Category
+                    <select
+                      value={editingMenuDraft.categoryId}
+                      onChange={(event) => setEditingMenuDraft((current) => ({ ...current, categoryId: event.target.value }))}
                     >
-                      {category.items.map((item) => (
-                        <div key={item.id} className="order-card">
-                          {item.photoUrl ? (
-                            <img
-                              src={item.photoUrl}
-                              alt={item.name}
-                              className="menu-thumb"
-                              style={{ width: "100%", height: 120, marginBottom: 10 }}
-                            />
-                          ) : null}
-                          <strong>{item.name}</strong>
-                          <p style={{ margin: "4px 0" }}>{formatCurrency(item.price, currency)}</p>
-                          {item.description ? <p className="menu-description">{item.description}</p> : null}
-                          <p style={{ marginTop: 8 }}>
-                            <span
-                              style={{
-                                color: item.isAvailable ? "var(--success)" : "var(--warning)",
-                                fontWeight: 600,
-                                fontSize: "0.85rem"
-                              }}
-                            >
-                              {item.isAvailable ? "● Available" : "○ Unavailable"}
-                            </span>
-                          </p>
-                          <div className="inline-actions" style={{ marginTop: 12 }}>
-                            <button type="button" onClick={() => void updateMenuItemPrice(item.id, item.price)} disabled={isPending}>
-                              Change price
-                            </button>
-                            <button type="button" onClick={() => void removeMenuItem(item.id, item.name)} disabled={isPending}>
-                              Remove item
-                            </button>
-                          </div>
+                      <option value="">Select category</option>
+                      {categories.map((category) => (
+                        <option key={category.id} value={category.id}>{category.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Price ({currency})
+                    <input
+                      inputMode="decimal"
+                      value={editingMenuDraft.price}
+                      onChange={(event) => setEditingMenuDraft((current) => ({ ...current, price: event.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    Image URL
+                    <input
+                      value={editingMenuDraft.photoUrl}
+                      onChange={(event) => setEditingMenuDraft((current) => ({ ...current, photoUrl: event.target.value }))}
+                    />
+                  </label>
+                  <label style={{ gridColumn: "1 / -1" }}>
+                    Description
+                    <textarea
+                      rows={3}
+                      value={editingMenuDraft.description}
+                      onChange={(event) => setEditingMenuDraft((current) => ({ ...current, description: event.target.value }))}
+                    />
+                  </label>
+                  <label className="checkbox-label">
+                    <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <input
+                        type="checkbox"
+                        checked={editingMenuDraft.isAvailable}
+                        onChange={(event) => setEditingMenuDraft((current) => ({ ...current, isAvailable: event.target.checked }))}
+                        style={{ width: "auto", padding: 0, borderRadius: 4 }}
+                      />
+                      Available on menu
+                    </span>
+                  </label>
+                </div>
+                <div className="inline-actions">
+                  <button type="submit" disabled={isPending}>Save menu item</button>
+                  <button
+                    type="button"
+                    className="danger-button"
+                    onClick={() => void removeMenuItem(editingMenuItemId, editingMenuDraft.name || "this item")}
+                    disabled={isPending}
+                  >
+                    Remove item
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </article>
+
+        <article id="inventory" className="card panel" style={{ gridColumn: "1 / -1" }}>
+          <div className="panel-head">
+            <h2>Inventory and recipes</h2>
+            <p>Search ingredients, edit consumables, map recipes to menu items, and keep the whole flow usable on phones.</p>
+          </div>
+
+          <div className="touch-grid">
+            <div className="stat-chip">
+              <span>Stock items</span>
+              <strong>{inventory.length}</strong>
+            </div>
+            <div className="stat-chip">
+              <span>Consumables</span>
+              <strong>{consumableItems.length}</strong>
+            </div>
+            <div className="stat-chip">
+              <span>Recipes</span>
+              <strong>{recipes.length}</strong>
+            </div>
+            <div className="stat-chip">
+              <span>Low stock</span>
+              <strong>{inventory.filter((item) => item.lowStock || item.quantity <= item.reorderLevel).length}</strong>
+            </div>
+          </div>
+
+          <div className="management-subgrid" style={{ marginTop: 18 }}>
+            <section className="inventory-panel">
+              <div className="panel-head">
+                <h2>Add stock item</h2>
+                <p>Create consumables or menu-linked stock from the same compact form.</p>
+              </div>
+              <form className="stack" onSubmit={createStockItem}>
+                <div className="chip-toggle">
+                  {(["CONSUMABLE", "MENU"] as const).map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      className={stockType === option ? "toggle-active" : "toggle-inactive"}
+                      onClick={() => setStockType(option)}
+                    >
+                      {option === "MENU" ? "Menu stock" : "Consumable"}
+                    </button>
+                  ))}
+                </div>
+                <div className="field-grid">
+                  <label>
+                    Stock item name
+                    <input value={stockName} onChange={(event) => setStockName(event.target.value)} placeholder="e.g. Cooking oil" />
+                  </label>
+                  <label>
+                    Unit
+                    <select value={stockUnit} onChange={(event) => setStockUnit(event.target.value as StockUnit)}>
+                      {stockUnits.map((unit) => (
+                        <option key={unit.value} value={unit.value}>{unit.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Quantity
+                    <input value={stockQuantity} onChange={(event) => setStockQuantity(event.target.value)} inputMode="decimal" />
+                  </label>
+                  <label>
+                    Reorder level
+                    <input value={stockReorderLevel} onChange={(event) => setStockReorderLevel(event.target.value)} inputMode="decimal" />
+                  </label>
+                  {stockType === "MENU" ? (
+                    <label style={{ gridColumn: "1 / -1" }}>
+                      Linked menu item
+                      <select value={stockMenuItemId} onChange={(event) => setStockMenuItemId(event.target.value)}>
+                        <option value="">Select menu item</option>
+                        {allMenuItems.map((item) => (
+                          <option key={item.id} value={item.id}>{item.categoryName} · {item.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
+                </div>
+                <button type="submit" disabled={isPending}>Create stock item</button>
+              </form>
+            </section>
+
+            <section id="stock-editor" className="inventory-panel">
+              <div className="panel-head">
+                <h2>Edit stock item</h2>
+                <p>Change names, units, quantities, reorder levels, or linked menu items.</p>
+              </div>
+              <div className="stack">
+                <label>
+                  Search stock
+                  <input
+                    value={inventorySearch}
+                    onChange={(event) => setInventorySearch(event.target.value)}
+                    placeholder="Search by name, unit, or linked item"
+                  />
+                </label>
+                <div className="selection-grid">
+                  {filteredInventory.length === 0 ? (
+                    <div className="empty-state">
+                      <p>No stock items match your search.</p>
+                    </div>
+                  ) : filteredInventory.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`selection-card ${selectedStockItemId === item.id ? "selection-card-active" : ""}`}
+                      onClick={() => beginStockEdit(item)}
+                    >
+                      <span>{item.type === "MENU" ? "Menu stock" : "Consumable"}</span>
+                      <strong>{item.name}</strong>
+                      <small>
+                        {item.quantity} {item.unit} · reorder at {item.reorderLevel}
+                        {item.menuItem ? ` · ${item.menuItem.name}` : ""}
+                      </small>
+                    </button>
+                  ))}
+                </div>
+
+                {!selectedStockItem || !selectedStockDraft ? (
+                  <div className="empty-state">
+                    <strong>Select a stock item</strong>
+                    <p>Tap any stock card above to edit units, quantities, or linked menu details.</p>
+                  </div>
+                ) : (
+                  <form className="stack" onSubmit={saveStockItem}>
+                    <div className="field-grid">
+                      <label>
+                        Stock item name
+                        <input
+                          value={selectedStockDraft.name}
+                          onChange={(event) => updateStockDraft(selectedStockItem.id, { name: event.target.value })}
+                        />
+                      </label>
+                      <label>
+                        Unit
+                        <select
+                          value={selectedStockDraft.unit}
+                          onChange={(event) => updateStockDraft(selectedStockItem.id, { unit: event.target.value as StockUnit })}
+                        >
+                          {stockUnits.map((unit) => (
+                            <option key={unit.value} value={unit.value}>{unit.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Quantity
+                        <input
+                          value={selectedStockDraft.quantity}
+                          onChange={(event) => updateStockDraft(selectedStockItem.id, { quantity: event.target.value })}
+                          inputMode="decimal"
+                        />
+                      </label>
+                      <label>
+                        Reorder level
+                        <input
+                          value={selectedStockDraft.reorderLevel}
+                          onChange={(event) => updateStockDraft(selectedStockItem.id, { reorderLevel: event.target.value })}
+                          inputMode="decimal"
+                        />
+                      </label>
+                      <label>
+                        Stock type
+                        <select
+                          value={selectedStockDraft.type}
+                          onChange={(event) => updateStockDraft(selectedStockItem.id, { type: event.target.value as "MENU" | "CONSUMABLE" })}
+                        >
+                          <option value="CONSUMABLE">Consumable</option>
+                          <option value="MENU">Menu stock</option>
+                        </select>
+                      </label>
+                      {selectedStockDraft.type === "MENU" ? (
+                        <label>
+                          Linked menu item
+                          <select
+                            value={selectedStockDraft.menuItemId}
+                            onChange={(event) => updateStockDraft(selectedStockItem.id, { menuItemId: event.target.value })}
+                          >
+                            <option value="">Select menu item</option>
+                            {allMenuItems.map((item) => (
+                              <option key={item.id} value={item.id}>{item.categoryName} · {item.name}</option>
+                            ))}
+                          </select>
+                        </label>
+                      ) : null}
+                    </div>
+                    <button type="submit" disabled={isPending}>Save stock item</button>
+                  </form>
+                )}
+              </div>
+            </section>
+          </div>
+
+          <div className="management-subgrid" style={{ marginTop: 18 }}>
+            <section id="recipe-builder" className="inventory-panel">
+              <div className="panel-head">
+                <h2>Recipe builder</h2>
+                <p>Pick a menu item, search ingredients, and save recipe changes without scrolling through every stock record.</p>
+              </div>
+              <form className="stack" onSubmit={saveRecipe}>
+                <label>
+                  Search menu item
+                  <input
+                    value={recipeMenuSearch}
+                    onChange={(event) => setRecipeMenuSearch(event.target.value)}
+                    placeholder="Search menu item"
+                  />
+                </label>
+                <div className="selection-grid">
+                  {filteredRecipeMenuItems.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`selection-card ${recipeMenuItemId === String(item.id) ? "selection-card-active" : ""}`}
+                      onClick={() => setRecipeMenuItemId(String(item.id))}
+                    >
+                      <span>{item.categoryName}</span>
+                      <strong>{item.name}</strong>
+                      <small>{formatCurrency(item.price, currency)}</small>
+                    </button>
+                  ))}
+                </div>
+
+                <label>
+                  Search ingredients
+                  <input
+                    value={recipeIngredientSearch}
+                    onChange={(event) => setRecipeIngredientSearch(event.target.value)}
+                    placeholder="Search consumables"
+                  />
+                </label>
+
+                {recipeDraftItems.map((item, index) => {
+                  const selectedIngredient = consumableItems.find((entry) => entry.id === Number(item.stockItemId));
+                  const ingredientOptions = selectedIngredient && !filteredRecipeIngredients.some((entry) => entry.id === selectedIngredient.id)
+                    ? [selectedIngredient, ...filteredRecipeIngredients]
+                    : filteredRecipeIngredients;
+
+                  return (
+                    <div key={`${index}-${item.stockItemId}`} className="list-card">
+                      <div className="field-grid">
+                        <label>
+                          Ingredient
+                          <select
+                            value={item.stockItemId}
+                            onChange={(event) => {
+                              const selected = consumableItems.find((entry) => entry.id === Number(event.target.value));
+                              updateRecipeDraftItem(index, {
+                                stockItemId: event.target.value,
+                                unit: selected?.unit ?? item.unit
+                              });
+                            }}
+                          >
+                            <option value="">Select ingredient</option>
+                            {ingredientOptions.map((entry) => (
+                              <option key={entry.id} value={entry.id}>
+                                {entry.name} · {entry.quantity} {entry.unit}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          Quantity used
+                          <input
+                            value={item.quantity}
+                            onChange={(event) => updateRecipeDraftItem(index, { quantity: event.target.value })}
+                            inputMode="decimal"
+                          />
+                        </label>
+                        <label>
+                          Unit
+                          <select
+                            value={item.unit}
+                            onChange={(event) => updateRecipeDraftItem(index, { unit: event.target.value as StockUnit })}
+                          >
+                            {stockUnits.map((unit) => (
+                              <option key={unit.value} value={unit.value}>{unit.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                      <button type="button" className="ghost-button" onClick={() => removeRecipeDraftItem(index)}>
+                        Remove ingredient
+                      </button>
+                    </div>
+                  );
+                })}
+
+                <div className="inline-actions">
+                  <button type="button" className="ghost-button" onClick={addRecipeDraftItem}>Add ingredient</button>
+                  <button type="submit" disabled={isPending}>Save recipe</button>
+                </div>
+              </form>
+            </section>
+
+            <section className="inventory-panel">
+              <div className="panel-head">
+                <h2>Recipe coverage</h2>
+                <p>Edit any existing recipe directly from the list below.</p>
+              </div>
+              <div className="order-list">
+                {recipes.length === 0 ? (
+                  <div className="empty-state">
+                    <strong>No recipes yet</strong>
+                    <p>Build the first recipe to connect menu sales to ingredient deduction.</p>
+                  </div>
+                ) : recipes.map((recipe) => (
+                  <div key={recipe.id} className="order-card">
+                    <div className="order-head">
+                      <div>
+                        <strong>{recipe.menuItem.name}</strong>
+                        <p>{recipe.items.length} ingredient{recipe.items.length === 1 ? "" : "s"}</p>
+                      </div>
+                      <button type="button" className="ghost-button" onClick={() => startRecipeEdit(recipe)}>
+                        Edit recipe
+                      </button>
+                    </div>
+                    <div className="compact-list" style={{ marginTop: 14 }}>
+                      {recipe.items.map((item) => (
+                        <div key={item.id} className="list-card">
+                          <strong>{item.stockItem.name}</strong>
+                          <p>{item.quantity} {item.unit}</p>
                         </div>
                       ))}
                     </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
         </article>
       </section>
     </main>
