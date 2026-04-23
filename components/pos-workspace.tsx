@@ -415,26 +415,6 @@ export function PosWorkspace() {
     };
   }, [isMenuOpen]);
 
-  useEffect(() => {
-    if (!recipeMenuItemId) {
-      setRecipeDraftItems([createEmptyRecipeDraftItem()]);
-      return;
-    }
-
-    const existingRecipe = recipes.find((recipe) => recipe.menuItem.id === Number(recipeMenuItemId));
-    if (!existingRecipe) {
-      setRecipeDraftItems([createEmptyRecipeDraftItem()]);
-      return;
-    }
-
-    setRecipeDraftItems(
-      existingRecipe.items.map((item) => ({
-        stockItemId: String(item.stockItem.id),
-        quantity: String(item.quantity),
-        unit: item.unit as StockUnit
-      }))
-    );
-  }, [recipeMenuItemId, recipes]);
 
   async function loadWorkspace(activeToken: string) {
     try {
@@ -2182,7 +2162,24 @@ export function PosWorkspace() {
             </div>
             <label>
               Recipe menu item
-              <select value={recipeMenuItemId} onChange={(event) => setRecipeMenuItemId(event.target.value)}>
+              <select value={recipeMenuItemId} onChange={(event) => {
+                const newId = event.target.value;
+                setRecipeMenuItemId(newId);
+                if (!newId) {
+                  setRecipeDraftItems([createEmptyRecipeDraftItem()]);
+                  return;
+                }
+                const existingRecipe = recipes.find((recipe) => recipe.menuItem.id === Number(newId));
+                setRecipeDraftItems(
+                  existingRecipe
+                    ? existingRecipe.items.map((item) => ({
+                        stockItemId: String(item.stockItem.id),
+                        quantity: String(item.quantity),
+                        unit: item.unit as StockUnit
+                      }))
+                    : [createEmptyRecipeDraftItem()]
+                );
+              }}>
                 <option value="">Select item</option>
                 {menuOptions.map((item) => (
                   <option key={item.id} value={item.id}>
@@ -2201,7 +2198,7 @@ export function PosWorkspace() {
             ) : null}
             <div className="compact-list">
               {recipeDraftItems.map((item, index) => (
-                <div key={`${index}-${item.stockItemId || "new"}`} className="order-card">
+                <div key={index} className="order-card">
                   <div className="inline-fields">
                     <label>
                       Stock ingredient

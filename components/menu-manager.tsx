@@ -1695,7 +1695,7 @@ export function MenuManager() {
                     : filteredRecipeIngredients;
 
                   return (
-                    <div key={`${index}-${item.stockItemId}`} className="list-card">
+                    <div key={index} className="list-card">
                       <div className="field-grid">
                         <label>
                           Ingredient
