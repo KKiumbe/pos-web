@@ -83,6 +83,7 @@ type RecipeDraftItem = {
   stockItemId: string;
   quantity: string;
   unit: StockUnit;
+  ingredientSearch: string;
 };
 
 type ReportPeriod = {
@@ -266,7 +267,7 @@ function createStockDraft(item?: InventoryItem): StockDraft {
 }
 
 function createRecipeDraftItem(): RecipeDraftItem {
-  return { stockItemId: "", quantity: "", unit: "GRAM" };
+  return { stockItemId: "", quantity: "", unit: "GRAM", ingredientSearch: "" };
 }
 
 function getTodayDate() {
@@ -312,8 +313,8 @@ export function MenuManager() {
   const [stockDrafts, setStockDrafts] = useState<Record<number, StockDraft>>({});
   const [recipeMenuItemId, setRecipeMenuItemId] = useState("");
   const [recipeMenuSearch, setRecipeMenuSearch] = useState("");
-  const [recipeIngredientSearch, setRecipeIngredientSearch] = useState("");
   const [recipeDraftItems, setRecipeDraftItems] = useState<RecipeDraftItem[]>([createRecipeDraftItem()]);
+  const [savedToast, setSavedToast] = useState<string | null>(null);
   const [staffFirstName, setStaffFirstName] = useState("");
   const [staffLastName, setStaffLastName] = useState("");
   const [staffEmail, setStaffEmail] = useState("");
@@ -335,6 +336,12 @@ export function MenuManager() {
       void loadManagement(token, reportDate);
     });
   }, [token]);
+
+  useEffect(() => {
+    if (!savedToast) return;
+    const timer = setTimeout(() => setSavedToast(null), 3000);
+    return () => clearTimeout(timer);
+  }, [savedToast]);
 
   function seedStaffDrafts(members: StaffMember[]) {
     setStaffDrafts(
@@ -701,7 +708,8 @@ export function MenuManager() {
         ? recipe.items.map((item) => ({
             stockItemId: String(item.stockItem.id),
             quantity: String(item.quantity),
-            unit: item.unit
+            unit: item.unit,
+            ingredientSearch: ""
           }))
         : [createRecipeDraftItem()]
     );
@@ -741,6 +749,7 @@ export function MenuManager() {
         token
       );
       setMessage("Recipe saved.");
+      setSavedToast("Recipe saved.");
       await loadManagement(token, reportDate);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to save recipe.");
@@ -886,9 +895,6 @@ export function MenuManager() {
   const filteredRecipeMenuItems = allMenuItems.filter((item) =>
     normalizeSearch(`${item.name} ${item.categoryName}`).includes(normalizeSearch(recipeMenuSearch))
   );
-  const filteredRecipeIngredients = consumableItems.filter((item) =>
-    normalizeSearch(`${item.name} ${item.unit}`).includes(normalizeSearch(recipeIngredientSearch))
-  );
   const selectedRecipeMenuItem = recipeMenuItemId
     ? allMenuItems.find((item) => String(item.id) === recipeMenuItemId) ?? null
     : null;
@@ -934,6 +940,24 @@ export function MenuManager() {
 
   return (
     <main className="page-shell">
+      {savedToast && (
+        <div
+          className="activity-toast"
+          data-tone="success"
+          aria-live="assertive"
+          style={{
+            position: "fixed",
+            bottom: 24,
+            right: 24,
+            zIndex: 9999,
+            minWidth: 200,
+            maxWidth: 320
+          }}
+        >
+          <strong>Saved</strong>
+          <p>{savedToast}</p>
+        </div>
+      )}
       <section className="topbar">
         <div>
           <p className="eyebrow">Management · {session.tenant.name}</p>
@@ -979,7 +1003,8 @@ export function MenuManager() {
         <a href="#employees" className="section-chip">Employees</a>
         <a href="#reports" className="section-chip">Reports</a>
         <a href="#menu" className="section-chip">Menu</a>
-        <a href="#inventory" className="section-chip">Inventory & recipes</a>
+        <a href="#inventory" className="section-chip">Inventory</a>
+        <a href="#recipes" className="section-chip">Recipes</a>
       </nav>
 
       <section id="overview" className="metrics-grid">
@@ -1463,8 +1488,8 @@ export function MenuManager() {
 
         <article id="inventory" className="card panel" style={{ gridColumn: "1 / -1" }}>
           <div className="panel-head">
-            <h2>Inventory and recipes</h2>
-            <p>Search ingredients, edit consumables, map recipes to menu items, and keep the whole flow usable on phones.</p>
+            <h2>Inventory</h2>
+            <p>Track stock items, set reorder levels, and adjust quantities as deliveries come in.</p>
           </div>
 
           <div className="touch-grid">
@@ -1475,10 +1500,6 @@ export function MenuManager() {
             <div className="stat-chip">
               <span>Consumables</span>
               <strong>{consumableItems.length}</strong>
-            </div>
-            <div className="stat-chip">
-              <span>Recipes</span>
-              <strong>{recipes.length}</strong>
             </div>
             <div className="stat-chip">
               <span>Low stock</span>
@@ -1652,6 +1673,25 @@ export function MenuManager() {
             </section>
           </div>
 
+        </article>
+
+        <article id="recipes" className="card panel" style={{ gridColumn: "1 / -1" }}>
+          <div className="panel-head">
+            <h2>Recipes</h2>
+            <p>Map each menu item to its consumable ingredients so every sale automatically deducts the right stock.</p>
+          </div>
+
+          <div className="touch-grid">
+            <div className="stat-chip">
+              <span>Recipes saved</span>
+              <strong>{recipes.length}</strong>
+            </div>
+            <div className="stat-chip">
+              <span>Menu items mapped</span>
+              <strong>{recipes.length} of {allMenuItems.length}</strong>
+            </div>
+          </div>
+
           <div className="management-subgrid" style={{ marginTop: 18 }}>
             <section id="recipe-builder" className="inventory-panel">
               <div className="panel-head">
@@ -1718,24 +1758,26 @@ export function MenuManager() {
                       </div>
                     </div>
 
-                    <label>
-                      Search ingredients
-                      <input
-                        value={recipeIngredientSearch}
-                        onChange={(event) => setRecipeIngredientSearch(event.target.value)}
-                        placeholder="Search consumables"
-                      />
-                    </label>
-
                     {recipeDraftItems.map((item, index) => {
+                      const filteredForItem = consumableItems.filter((entry) =>
+                        normalizeSearch(`${entry.name} ${entry.unit}`).includes(normalizeSearch(item.ingredientSearch))
+                      );
                       const selectedIngredient = consumableItems.find((entry) => entry.id === Number(item.stockItemId));
-                      const ingredientOptions = selectedIngredient && !filteredRecipeIngredients.some((entry) => entry.id === selectedIngredient.id)
-                        ? [selectedIngredient, ...filteredRecipeIngredients]
-                        : filteredRecipeIngredients;
+                      const ingredientOptions = selectedIngredient && !filteredForItem.some((entry) => entry.id === selectedIngredient.id)
+                        ? [selectedIngredient, ...filteredForItem]
+                        : filteredForItem;
 
                       return (
                         <div key={index} className="list-card">
                           <div className="field-grid">
+                            <label style={{ gridColumn: "1 / -1" }}>
+                              Search ingredient
+                              <input
+                                value={item.ingredientSearch}
+                                onChange={(event) => updateRecipeDraftItem(index, { ingredientSearch: event.target.value })}
+                                placeholder="Search consumables..."
+                              />
+                            </label>
                             <label>
                               Ingredient
                               <select
