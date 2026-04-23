@@ -38,29 +38,6 @@ type InventoryItem = {
   lowStock: boolean;
 };
 
-type RecipeDefinition = {
-  id: number;
-  menuItem: {
-    id: number;
-    name: string;
-  };
-  items: Array<{
-    id: number;
-    quantity: number;
-    unit: StockUnit;
-    stockItem: {
-      id: number;
-      name: string;
-      unit: StockUnit;
-    };
-  }>;
-};
-
-type RecipeDraftItem = {
-  stockItemId: string;
-  quantity: string;
-  unit: StockUnit;
-};
 
 type DashboardSummary = {
   openOrders: number;
@@ -231,7 +208,6 @@ export function PosWorkspace() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [allOrders, setAllOrders] = useState<Order[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
-  const [recipes, setRecipes] = useState<RecipeDefinition[]>([]);
   const [report, setReport] = useState<Report | null>(null);
   const [smsMessages, setSmsMessages] = useState<SmsMessage[]>([]);
   const [mpesaTransactions, setMpesaTransactions] = useState<MpesaTransaction[]>([]);
@@ -262,8 +238,7 @@ export function PosWorkspace() {
   const [stockReorderLevel, setStockReorderLevel] = useState("");
   const [stockType, setStockType] = useState<"MENU" | "CONSUMABLE">("CONSUMABLE");
   const [stockMenuItemId, setStockMenuItemId] = useState("");
-  const [recipeMenuItemId, setRecipeMenuItemId] = useState("");
-  const [recipeDraftItems, setRecipeDraftItems] = useState<RecipeDraftItem[]>([{ stockItemId: "", quantity: "", unit: "GRAM" }]);
+
   const [stockDrafts, setStockDrafts] = useState<Record<number, { quantity: string; reorderLevel: string }>>({});
   const [smsRecipient, setSmsRecipient] = useState("");
   const [smsText, setSmsText] = useState("");
@@ -354,10 +329,6 @@ export function PosWorkspace() {
     showNotice(`Low stock: ${preview}${lowItems.length > 3 ? ` and ${lowItems.length - 3} more` : ""}.`, "warning");
   }
 
-  function createEmptyRecipeDraftItem(): RecipeDraftItem {
-    return { stockItemId: "", quantity: "", unit: "GRAM" };
-  }
-
   function finishAction(actionKey: string, text: string, tone: "success" | "warning" | "info") {
     setBusyActions((current) => {
       const next = { ...current };
@@ -434,7 +405,6 @@ export function PosWorkspace() {
         apiRequest<Order[]>("/orders?scope=all", {}, activeToken),
         canCreateOrders ? apiRequest<DeliveryAgent[]>("/delivery-agents?activeOnly=true", {}, activeToken) : Promise.resolve([]),
         canSeeInventory ? apiRequest<InventoryItem[]>("/inventory/items", {}, activeToken) : Promise.resolve([]),
-        canSeeInventory ? apiRequest<RecipeDefinition[]>("/inventory/recipes", {}, activeToken) : Promise.resolve([]),
         canSeeReports ? apiRequest<Report>("/reports/daily", {}, activeToken) : Promise.resolve(null),
         canManageRestaurant ? apiRequest<SmsMessage[]>("/integrations/sms/messages", {}, activeToken) : Promise.resolve([]),
         canManageRestaurant ? apiRequest<MpesaTransaction[]>("/integrations/mpesa/transactions", {}, activeToken) : Promise.resolve([]),
@@ -451,7 +421,6 @@ export function PosWorkspace() {
         allOrdersData,
         activeDeliveryAgentsData,
         inventoryData,
-        recipeData,
         reportData,
         smsData,
         mpesaData,
@@ -468,7 +437,6 @@ export function PosWorkspace() {
       setAllOrders(allOrdersData);
       setDeliveryAgents(canManageRestaurant ? managedDeliveryAgentsData : activeDeliveryAgentsData);
       setInventory(inventoryData);
-      setRecipes(recipeData);
       seedStockDrafts(inventoryData);
       notifyLowStock(inventoryData);
       setReport(reportData);
@@ -871,64 +839,6 @@ export function PosWorkspace() {
     }
   }
 
-  function addRecipeDraftItem() {
-    setRecipeDraftItems((current) => [...current, createEmptyRecipeDraftItem()]);
-  }
-
-  function updateRecipeDraftItem(index: number, patch: Partial<RecipeDraftItem>) {
-    setRecipeDraftItems((current) =>
-      current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item))
-    );
-  }
-
-  function removeRecipeDraftItem(index: number) {
-    setRecipeDraftItems((current) =>
-      current.length === 1 ? [createEmptyRecipeDraftItem()] : current.filter((_, itemIndex) => itemIndex !== index)
-    );
-  }
-
-  async function createRecipe(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!token || !recipeMenuItemId) {
-      return;
-    }
-
-    const recipeItems = recipeDraftItems
-      .filter((item) => item.stockItemId && item.quantity)
-      .map((item) => ({
-        stockItemId: Number(item.stockItemId),
-        quantity: Number(item.quantity),
-        unit: item.unit
-      }));
-
-    if (recipeItems.length === 0) {
-      return;
-    }
-
-    if (busyActions.createRecipe) {
-      return;
-    }
-    try {
-      startAction("createRecipe", "Saving recipe...");
-      await apiRequest(
-        "/inventory/recipes",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            menuItemId: Number(recipeMenuItemId),
-            items: recipeItems
-          })
-        },
-        token
-      );
-
-      await loadWorkspace(token);
-      finishAction("createRecipe", "Recipe saved successfully.", "success");
-    } catch (error) {
-      finishAction("createRecipe", error instanceof Error ? error.message : "Unable to save recipe.", "warning");
-    }
-  }
-
   async function sendSms(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!token || !smsRecipient || !smsText) {
@@ -1304,7 +1214,6 @@ export function PosWorkspace() {
   const openTakeawayOrders = orders.filter((order) => order.type === "TAKEAWAY" && order.status !== "PAID").length;
   const activeLowStockItems = inventory.filter((item) => item.lowStock).length;
   const latestTransactions = mpesaTransactions.slice(0, 3);
-  const selectedRecipe = recipes.find((recipe) => recipe.menuItem.id === Number(recipeMenuItemId)) ?? null;
   const managementLinks = [
     canSeeReports ? { id: "reports", label: "Reports" } : null,
     canManageRestaurant ? { id: "restaurant-admin", label: "Restaurant Admin" } : null,
@@ -2064,13 +1973,13 @@ export function PosWorkspace() {
         {canSeeInventory ? <article id="inventory" className="card panel">
           <div className="panel-head">
             <h2>Inventory</h2>
-            <p>Set stock, reorder thresholds, and ingredient recipes so ready orders deduct inventory automatically.</p>
+            <p>Set stock quantities and reorder thresholds so ready orders deduct inventory automatically.</p>
           </div>
           <div className="compact-list">
             {inventory.length === 0 ? (
               <div className="empty-state">
                 <strong>No stock items</strong>
-                <p>Add stock items before linking recipes or relying on payment-triggered deductions.</p>
+                <p>Add stock items to enable payment-triggered deductions.</p>
               </div>
             ) : inventory.map((item) => (
               <div key={item.id} className="order-card">
@@ -2155,120 +2064,13 @@ export function PosWorkspace() {
               {busyActions.createStockItem ? "Saving..." : "Add stock item"}
             </button>
           </form> : null}
-          {canManageRestaurant ? <form className="stack form-block" onSubmit={createRecipe}>
-            <div className="panel-head">
-              <h2>Recipe setup</h2>
-              <p>Define what is needed to prepare one menu item and how much of each ingredient is consumed.</p>
+          {canManageRestaurant ? (
+            <div className="empty-state form-block">
+              <strong>Manage recipes</strong>
+              <p>Build and edit ingredient recipes in the management dashboard under Inventory &amp; recipes.</p>
+              <a href="/management#inventory" className="ghost-button" style={{ display: "inline-block", marginTop: 8 }}>Go to Inventory &amp; recipes →</a>
             </div>
-            <label>
-              Recipe menu item
-              <select value={recipeMenuItemId} onChange={(event) => {
-                const newId = event.target.value;
-                setRecipeMenuItemId(newId);
-                if (!newId) {
-                  setRecipeDraftItems([createEmptyRecipeDraftItem()]);
-                  return;
-                }
-                const existingRecipe = recipes.find((recipe) => recipe.menuItem.id === Number(newId));
-                setRecipeDraftItems(
-                  existingRecipe
-                    ? existingRecipe.items.map((item) => ({
-                        stockItemId: String(item.stockItem.id),
-                        quantity: String(item.quantity),
-                        unit: item.unit as StockUnit
-                      }))
-                    : [createEmptyRecipeDraftItem()]
-                );
-              }}>
-                <option value="">Select item</option>
-                {menuOptions.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {selectedRecipe ? (
-              <div className="empty-state">
-                <strong>Current recipe</strong>
-                <p>
-                  {selectedRecipe.items.map((item) => `${item.stockItem.name} ${item.quantity} ${item.unit}`).join(" · ")}
-                </p>
-              </div>
-            ) : null}
-            <div className="compact-list">
-              {recipeDraftItems.map((item, index) => (
-                <div key={index} className="order-card">
-                  <div className="inline-fields">
-                    <label>
-                      Stock ingredient
-                      <select
-                        value={item.stockItemId}
-                        onChange={(event) => updateRecipeDraftItem(index, { stockItemId: event.target.value })}
-                      >
-                        <option value="">Select stock</option>
-                        {inventory.filter((stockItem) => stockItem.type !== "MENU").map((stockItem) => (
-                          <option key={stockItem.id} value={stockItem.id}>
-                            {stockItem.name} · {stockItem.unit}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      Quantity per menu item
-                      <input
-                        inputMode="decimal"
-                        value={item.quantity}
-                        onChange={(event) => updateRecipeDraftItem(index, { quantity: event.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Recipe unit
-                      <select value={item.unit} onChange={(event) => updateRecipeDraftItem(index, { unit: event.target.value as StockUnit })}>
-                        {stockUnits.map((unit) => (
-                          <option key={unit.value} value={unit.value}>
-                            {unit.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                  <div className="inline-actions">
-                    <button type="button" onClick={() => removeRecipeDraftItem(index)}>
-                      Remove ingredient
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div className="inline-actions">
-              <button type="button" onClick={addRecipeDraftItem}>
-                Add ingredient
-              </button>
-            </div>
-            <button type="submit" disabled={busyActions.createRecipe}>
-              {busyActions.createRecipe ? "Saving..." : "Save recipe"}
-            </button>
-          </form> : null}
-          <div className="compact-list form-block">
-            <div className="panel-head">
-              <h2>Saved recipes</h2>
-              <p>Review the ingredient list that will be deducted when an order is ready.</p>
-            </div>
-            {recipes.length === 0 ? (
-              <div className="empty-state">
-                <strong>No recipes saved</strong>
-                <p>Choose a menu item above and add its ingredients to activate automatic stock deductions.</p>
-              </div>
-            ) : recipes.map((recipe) => (
-              <div key={recipe.id} className="order-card">
-                <strong>{recipe.menuItem.name}</strong>
-                <p>
-                  {recipe.items.map((item) => `${item.stockItem.name} ${item.quantity} ${item.unit}`).join(" · ")}
-                </p>
-              </div>
-            ))}
-          </div>
+          ) : null}
         </article> : null}
 
         {canSeeReports ? <article id="reports" className="card panel">
