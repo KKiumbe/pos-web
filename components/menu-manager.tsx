@@ -695,7 +695,7 @@ export function MenuManager() {
 
   function startRecipeEdit(recipe: RecipeDefinition) {
     setRecipeMenuItemId(String(recipe.menuItem.id));
-    setRecipeMenuSearch(recipe.menuItem.name);
+    setRecipeMenuSearch("");
     setRecipeDraftItems(
       recipe.items.length > 0
         ? recipe.items.map((item) => ({
@@ -889,6 +889,9 @@ export function MenuManager() {
   const filteredRecipeIngredients = consumableItems.filter((item) =>
     normalizeSearch(`${item.name} ${item.unit}`).includes(normalizeSearch(recipeIngredientSearch))
   );
+  const selectedRecipeMenuItem = recipeMenuItemId
+    ? allMenuItems.find((item) => String(item.id) === recipeMenuItemId) ?? null
+    : null;
   const selectedStockItem = selectedStockItemId == null ? null : inventory.find((item) => item.id === selectedStockItemId) ?? null;
   const selectedStockDraft = selectedStockItemId == null ? null : stockDrafts[selectedStockItemId] ?? createStockDraft(selectedStockItem ?? undefined);
   const totalItems = allMenuItems.length;
@@ -1653,101 +1656,139 @@ export function MenuManager() {
             <section id="recipe-builder" className="inventory-panel">
               <div className="panel-head">
                 <h2>Recipe builder</h2>
-                <p>Pick a menu item, search ingredients, and save recipe changes without scrolling through every stock record.</p>
+                <p>Search and select a menu item, then add its ingredients.</p>
               </div>
               <form className="stack" onSubmit={saveRecipe}>
-                <label>
-                  Search menu item
-                  <input
-                    value={recipeMenuSearch}
-                    onChange={(event) => setRecipeMenuSearch(event.target.value)}
-                    placeholder="Search menu item"
-                  />
-                </label>
-                <div className="selection-grid">
-                  {filteredRecipeMenuItems.map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      className={`selection-card ${recipeMenuItemId === String(item.id) ? "selection-card-active" : ""}`}
-                      onClick={() => setRecipeMenuItemId(String(item.id))}
-                    >
-                      <span>{item.categoryName}</span>
-                      <strong>{item.name}</strong>
-                      <small>{formatCurrency(item.price, currency)}</small>
-                    </button>
-                  ))}
-                </div>
-
-                <label>
-                  Search ingredients
-                  <input
-                    value={recipeIngredientSearch}
-                    onChange={(event) => setRecipeIngredientSearch(event.target.value)}
-                    placeholder="Search consumables"
-                  />
-                </label>
-
-                {recipeDraftItems.map((item, index) => {
-                  const selectedIngredient = consumableItems.find((entry) => entry.id === Number(item.stockItemId));
-                  const ingredientOptions = selectedIngredient && !filteredRecipeIngredients.some((entry) => entry.id === selectedIngredient.id)
-                    ? [selectedIngredient, ...filteredRecipeIngredients]
-                    : filteredRecipeIngredients;
-
-                  return (
-                    <div key={index} className="list-card">
-                      <div className="field-grid">
-                        <label>
-                          Ingredient
-                          <select
-                            value={item.stockItemId}
-                            onChange={(event) => {
-                              const selected = consumableItems.find((entry) => entry.id === Number(event.target.value));
-                              updateRecipeDraftItem(index, {
-                                stockItemId: event.target.value,
-                                unit: selected?.unit ?? item.unit
-                              });
-                            }}
-                          >
-                            <option value="">Select ingredient</option>
-                            {ingredientOptions.map((entry) => (
-                              <option key={entry.id} value={entry.id}>
-                                {entry.name} · {entry.quantity} {entry.unit}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label>
-                          Quantity used
-                          <input
-                            value={item.quantity}
-                            onChange={(event) => updateRecipeDraftItem(index, { quantity: event.target.value })}
-                            inputMode="decimal"
-                          />
-                        </label>
-                        <label>
-                          Unit
-                          <select
-                            value={item.unit}
-                            onChange={(event) => updateRecipeDraftItem(index, { unit: event.target.value as StockUnit })}
-                          >
-                            {stockUnits.map((unit) => (
-                              <option key={unit.value} value={unit.value}>{unit.label}</option>
-                            ))}
-                          </select>
-                        </label>
+                {!recipeMenuItemId ? (
+                  <>
+                    <label>
+                      Search menu item
+                      <input
+                        value={recipeMenuSearch}
+                        onChange={(event) => setRecipeMenuSearch(event.target.value)}
+                        placeholder="Type to search menu items..."
+                      />
+                    </label>
+                    {recipeMenuSearch.trim() ? (
+                      filteredRecipeMenuItems.length === 0 ? (
+                        <p className="helper-text">No menu items match "{recipeMenuSearch}".</p>
+                      ) : (
+                        <div className="selection-grid">
+                          {filteredRecipeMenuItems.map((item) => (
+                            <button
+                              key={item.id}
+                              type="button"
+                              className="selection-card"
+                              onClick={() => {
+                                setRecipeMenuItemId(String(item.id));
+                                setRecipeMenuSearch("");
+                              }}
+                            >
+                              <span>{item.categoryName}</span>
+                              <strong>{item.name}</strong>
+                              <small>{formatCurrency(item.price, currency)}</small>
+                            </button>
+                          ))}
+                        </div>
+                      )
+                    ) : (
+                      <p className="helper-text">Search for a menu item to start building its recipe.</p>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="list-card">
+                      <div className="order-head">
+                        <div>
+                          <p className="helper-text" style={{ marginBottom: 2 }}>{selectedRecipeMenuItem?.categoryName}</p>
+                          <strong>{selectedRecipeMenuItem?.name}</strong>
+                          <p className="helper-text" style={{ marginTop: 2 }}>{formatCurrency(selectedRecipeMenuItem?.price ?? 0, currency)}</p>
+                        </div>
+                        <button
+                          type="button"
+                          className="ghost-button"
+                          onClick={() => {
+                            setRecipeMenuItemId("");
+                            setRecipeMenuSearch("");
+                            setRecipeDraftItems([createRecipeDraftItem()]);
+                          }}
+                        >
+                          Change item
+                        </button>
                       </div>
-                      <button type="button" className="ghost-button" onClick={() => removeRecipeDraftItem(index)}>
-                        Remove ingredient
-                      </button>
                     </div>
-                  );
-                })}
 
-                <div className="inline-actions">
-                  <button type="button" className="ghost-button" onClick={addRecipeDraftItem}>Add ingredient</button>
-                  <button type="submit" disabled={isPending}>Save recipe</button>
-                </div>
+                    <label>
+                      Search ingredients
+                      <input
+                        value={recipeIngredientSearch}
+                        onChange={(event) => setRecipeIngredientSearch(event.target.value)}
+                        placeholder="Search consumables"
+                      />
+                    </label>
+
+                    {recipeDraftItems.map((item, index) => {
+                      const selectedIngredient = consumableItems.find((entry) => entry.id === Number(item.stockItemId));
+                      const ingredientOptions = selectedIngredient && !filteredRecipeIngredients.some((entry) => entry.id === selectedIngredient.id)
+                        ? [selectedIngredient, ...filteredRecipeIngredients]
+                        : filteredRecipeIngredients;
+
+                      return (
+                        <div key={index} className="list-card">
+                          <div className="field-grid">
+                            <label>
+                              Ingredient
+                              <select
+                                value={item.stockItemId}
+                                onChange={(event) => {
+                                  const selected = consumableItems.find((entry) => entry.id === Number(event.target.value));
+                                  updateRecipeDraftItem(index, {
+                                    stockItemId: event.target.value,
+                                    unit: selected?.unit ?? item.unit
+                                  });
+                                }}
+                              >
+                                <option value="">Select ingredient</option>
+                                {ingredientOptions.map((entry) => (
+                                  <option key={entry.id} value={entry.id}>
+                                    {entry.name} · {entry.quantity} {entry.unit}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <label>
+                              Quantity used
+                              <input
+                                value={item.quantity}
+                                onChange={(event) => updateRecipeDraftItem(index, { quantity: event.target.value })}
+                                inputMode="decimal"
+                              />
+                            </label>
+                            <label>
+                              Unit
+                              <select
+                                value={item.unit}
+                                onChange={(event) => updateRecipeDraftItem(index, { unit: event.target.value as StockUnit })}
+                              >
+                                {stockUnits.map((unit) => (
+                                  <option key={unit.value} value={unit.value}>{unit.label}</option>
+                                ))}
+                              </select>
+                            </label>
+                          </div>
+                          <button type="button" className="ghost-button" onClick={() => removeRecipeDraftItem(index)}>
+                            Remove ingredient
+                          </button>
+                        </div>
+                      );
+                    })}
+
+                    <div className="inline-actions">
+                      <button type="button" className="ghost-button" onClick={addRecipeDraftItem}>Add ingredient</button>
+                      <button type="submit" disabled={isPending}>Save recipe</button>
+                    </div>
+                  </>
+                )}
               </form>
             </section>
 
